@@ -1,0 +1,24 @@
+name: Post Quora Answer
+  on:
+    repository_dispatch:
+      types: [post-answer]
+
+  jobs:
+    post:
+      runs-on: ubuntu-latest
+      steps:
+        - uses: actions/checkout@v4
+        - uses: actions/setup-node@v4
+          with:
+            node-version: '20'
+        - name: Install dependencies
+          run: npm install
+        - name: Install Chromium
+          run: npx puppeteer browsers install chrome
+        - name: Post Answer
+          env:
+            QUORA_EMAIL: ${{ secrets.QUORA_EMAIL }}
+            QUORA_PASSWORD: ${{ secrets.QUORA_PASSWORD }}
+            QUESTION_URL: ${{ github.event.client_payload.question_url }}
+            ANSWER_TEXT: ${{ github.event.client_payload.answer_text }}
+          run: node scripts/post-quora.js
