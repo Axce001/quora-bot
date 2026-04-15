@@ -20,8 +20,11 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
-      - run: npm install
-      - run: npx puppeteer browsers install chrome
+      - name: Install dependencies (skip Chromium download)
+        run: npm install
+        env:
+          PUPPETEER_SKIP_CHROMIUM_DOWNLOAD: 'true'
+          PUPPETEER_SKIP_DOWNLOAD: 'true'
       - name: Post answer to Quora
         env:
           QUORA_EMAIL: ${{ secrets.QUORA_EMAIL }}
