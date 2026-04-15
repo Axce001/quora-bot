@@ -11,74 +11,112 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 (async () => {
   const browser = await puppeteer.launch({
-    headless: true,
-    args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
+    headless: 'new',
+    args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-blink-features=AutomationControlled']
   });
 
   const page = await browser.newPage();
   await page.setViewport({ width: 1280, height: 800 });
   await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
 
+  // Remove webdriver flag
+  await page.evaluateOnNewDocument(() => {
+    Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+  });
+
   console.log('Navigating to Quora login...');
   await page.goto('https://www.quora.com/login', { waitUntil: 'domcontentloaded', timeout: 30000 });
-  await sleep(3000);
+  await sleep(5000);
 
-  console.log('Filling login form...');
-  await page.waitForSelector('input[type="email"]', { timeout: 15000 });
-  await page.type('input[type="email"]', email, { delay: 80 });
-  await sleep(700);
-  await page.type('input[type="password"]', password, { delay: 80 });
+  console.log('Page URL:', page.url());
+  console.log('Page title:', await page.title());
+
+  // Log all visible inputs for debug
+  const inputs = await page.evaluate(() => {
+    return Array.from(document.querySelectorAll('input')).map(i => ({
+      type: i.type, name: i.name, placeholder: i.placeholder, id: i.id, className: i.className.substring(0,50)
+    }));
+  });
+  console.log('Inputs found:', JSON.stringify(inputs));
+
+  // Try multiple selectors for email
+  const emailSelectors = [
+    'input[type="email"]',
+    'input[name="email"]',
+    'input[placeholder*="mail" i]',
+    'input[data-field-name="email"]',
+    'input.qu-borderAll'
+  ];
+
+  let emailInput = null;
+  for (const sel of emailSelectors) {
+    try {
+      emailInput = await page.waitForSelector(sel, { timeout: 3000 });
+      if (emailInput) { console.log('Found email input:', sel); break; }
+    } catch (e) {}
+  }
+
+  if (!emailInput) {
+    console.log('No email input found. Page HTML snippet:');
+    const html = await page.evaluate(() => document.body.innerHTML.substring(0, 2000));
+    console.log(html);
+    await browser.close();
+    process.exit(1);
+  }
+
+  await emailInput.click({ clickCount: 3 });
+  await page.keyboard.type(email, { delay: 80 });
   await sleep(700);
 
-  // Click login button instead of Enter (more reliable)
-  const loginBtn = await page.$('button[type="submit"]') ||
-                   await page.$('input[type="submit"]');
+  // Password
+  const pwdSelectors = ['input[type="password"]', 'input[name="password"]', 'input[placeholder*="assword" i]'];
+  let pwdInput = null;
+  for (const sel of pwdSelectors) {
+    pwdInput = await page.$(sel);
+    if (pwdInput) { console.log('Found password input:', sel); break; }
+  }
+  if (!pwdInput) { console.log('No password input!'); await browser.close(); process.exit(1); }
+
+  await pwdInput.click({ clickCount: 3 });
+  await page.keyboard.type(password, { delay: 80 });
+  await sleep(700);
+
+  // Submit
+  const loginBtn = await page.$('button[type="submit"]') || await page.$('.qu-bg--blue');
   if (loginBtn) {
     await loginBtn.click();
     console.log('Clicked login button');
   } else {
     await page.keyboard.press('Enter');
-    console.log('Pressed Enter to login');
+    console.log('Pressed Enter');
   }
 
-  // Quora is SPA - don't use waitForNavigation, just wait for URL change
-  console.log('Waiting for login to complete...');
+  // Wait for URL change
   try {
-    await page.waitForFunction(
-      () => !window.location.href.includes('/login'),
-      { timeout: 25000 }
-    );
+    await page.waitForFunction(() => !window.location.href.includes('/login'), { timeout: 25000 });
   } catch (e) {
-    console.log('URL still on login, checking page state...');
+    console.log('Still on login page after wait. URL:', page.url());
   }
   await sleep(4000);
-  console.log('Current URL:', page.url());
+  console.log('Post-login URL:', page.url());
 
-  console.log('Navigating to question:', questionUrl);
+  console.log('Navigating to question...');
   await page.goto(questionUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
   await sleep(4000);
 
-  // Find and click Answer button
+  // Click Answer button
   const buttons = await page.$$('button');
   let answerBtn = null;
   for (const btn of buttons) {
-    const text = await page.evaluate(el => el.textContent, btn);
-    if (text.trim() === 'Answer' || text.trim().startsWith('Answer')) {
-      answerBtn = btn;
-      break;
-    }
+    const text = await page.evaluate(el => el.textContent.trim(), btn);
+    if (text === 'Answer' || text.startsWith('Answer')) { answerBtn = btn; break; }
   }
   if (answerBtn) {
     await answerBtn.click();
-    console.log('Answer button clicked');
-  } else {
-    console.log('Answer button not found, trying aria-label...');
-    const ariaBtn = await page.$('[aria-label*="Answer"]');
-    if (ariaBtn) await ariaBtn.click();
+    console.log('Clicked Answer button');
   }
   await sleep(3000);
 
-  // Type answer in editor
   const editor = await page.$('[contenteditable="true"]');
   if (editor) {
     await editor.click();
@@ -86,20 +124,18 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
     await page.keyboard.type(answerText, { delay: 20 });
     console.log('Answer typed!');
   } else {
-    console.log('Editor not found - taking screenshot for debug');
-    await page.screenshot({ path: 'debug.png' });
+    console.log('Editor not found');
     await browser.close();
     process.exit(1);
   }
   await sleep(1500);
 
-  // Submit
   const allBtns = await page.$$('button');
   for (const btn of allBtns) {
-    const text = await page.evaluate(el => el.textContent, btn);
-    if (text.trim().includes('Submit') || text.trim() === 'Post') {
+    const text = await page.evaluate(el => el.textContent.trim(), btn);
+    if (text === 'Submit' || text === 'Post') {
       await btn.click();
-      console.log('Answer submitted!');
+      console.log('Submitted!');
       break;
     }
   }
