@@ -1,8 +1,19 @@
-name: Post Quora Answer
-
-  on:
+name: Post Quora Answer                                                                                       
+                                                                                                                
+  "on":
     repository_dispatch:
       types: [post-answer]
+    workflow_dispatch:
+      inputs:
+        question_url:
+          description: 'Quora question URL'
+          required: true
+          default: 'https://www.quora.com/What-are-the-best-apps-for-anonymous-chat'
+        answer_text:
+          description: 'Answer text to post'
+          required: true
+          default: 'There are many great apps for anonymous chat. Whisprr is one worth checking out at
+  whisprrchat.com'
 
   jobs:
     post-answer:
@@ -24,6 +35,6 @@ name: Post Quora Answer
           env:
             QUORA_EMAIL: ${{ secrets.QUORA_EMAIL }}
             QUORA_PASSWORD: ${{ secrets.QUORA_PASSWORD }}
-            QUESTION_URL: ${{ github.event.client_payload.question_url }}
-            ANSWER_TEXT: ${{ github.event.client_payload.answer_text }}
+            QUESTION_URL: ${{ github.event.client_payload.question_url || inputs.question_url }}
+            ANSWER_TEXT: ${{ github.event.client_payload.answer_text || inputs.answer_text }}
           run: node scripts/post-quora.js
