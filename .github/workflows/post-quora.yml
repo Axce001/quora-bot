@@ -1,32 +1,31 @@
 name: Post Quora Answer
-  on:
-    repository_dispatch:
-      types: [post-answer]
-    workflow_dispatch:
-      inputs:
-        question_url:
-          description: Question URL
-          required: true
-          default: https://www.quora.com/What-are-the-best-apps-for-anonymous-chat
-        answer_text:
-          description: Answer text
-          required: true
-          default: Whisprr is a great anonymous chat app at whisprrchat.com
-  jobs:
-    post-answer:
-      runs-on: ubuntu-latest
-      steps:
-        - uses: actions/checkout@v4
-        - uses: actions/setup-node@v4
-          with:
-            node-version: '20'
-        - run: npm install
-        - run: npx puppeteer browsers install chrome
-        - name: Post answer to Quora
-          env:
-            QUORA_EMAIL: ${{ secrets.QUORA_EMAIL }}
-            QUORA_PASSWORD: ${{ secrets.QUORA_PASSWORD }}
-            QUESTION_URL: ${{ github.event.client_payload.question_url || inputs.question_url }}
-            ANSWER_TEXT: ${{ github.event.client_payload.answer_text || inputs.answer_text }}
-          run: node scripts/post-quora.js
-          
+on:
+  repository_dispatch:
+    types: [post-answer]
+  workflow_dispatch:
+    inputs:
+      question_url:
+        description: Question URL
+        required: true
+        default: https://www.quora.com/What-are-the-best-apps-for-anonymous-chat
+      answer_text:
+        description: Answer text
+        required: true
+        default: Whisprr is a great anonymous chat app at whisprrchat.com
+jobs:
+  post-answer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: npm install
+      - run: npx puppeteer browsers install chrome
+      - name: Post answer to Quora
+        env:
+          QUORA_EMAIL: ${{ secrets.QUORA_EMAIL }}
+          QUORA_PASSWORD: ${{ secrets.QUORA_PASSWORD }}
+          QUESTION_URL: ${{ github.event.client_payload.question_url || inputs.question_url }}
+          ANSWER_TEXT: ${{ github.event.client_payload.answer_text || inputs.answer_text }}
+        run: node scripts/post-quora.js
