@@ -117,49 +117,98 @@ async function waitForCloudflare(page, maxWait = 60000) {
     process.exit(1);
   }
 
-  await emailInput.click({ clickCount: 3 });
-  await page.keyboard.type(email, { delay: 80 });
-  await sleep(700);
-
-  const pwdSelectors = [
-    'input[type="password"]',
-    'input[name="password"]',
-    'input[placeholder*="assword" i]'
-  ];
-  let pwdInput = null;
-  for (const sel of pwdSelectors) {
-    pwdInput = await page.$(sel);
-    if (pwdInput) { console.log('Found password input:', sel); break; }
-  }
-  if (!pwdInput) {
-    console.log('No password input found!');
-    await browser.close();
-    process.exit(1);
-  }
-
-  await pwdInput.click({ clickCount: 3 });
-  await page.keyboard.type(password, { delay: 80 });
-  await sleep(700);
-
-  const loginBtn = await page.$('button[type="submit"]') || await page.$('.qu-bg--blue');
-  if (loginBtn) {
-    await loginBtn.click();
-    console.log('Clicked login button');
+  // If pre-loaded cookies are available, use them instead of login
+  const quoraCookies = process.env.QUORA_COOKIES;
+  if (quoraCookies) {
+    try {
+      const cookies = JSON.parse(quoraCookies);
+      await page.setCookie(...cookies);
+      console.log('Loaded', cookies.length, 'cookies from QUORA_COOKIES env');
+      await page.goto('https://www.quora.com/', { waitUntil: 'domcontentloaded', timeout: 30000 });
+      await sleep(3000);
+      console.log('Cookie-based auth URL:', page.url());
+    } catch(e) {
+      console.log('Cookie load failed, falling back to login:', e.message);
+    }
   } else {
-    await page.keyboard.press('Enter');
-    console.log('Pressed Enter to submit');
-  }
+    // Login flow
+    await emailInput.click({ clickCount: 3 });
+    await page.keyboard.type(email, { delay: 80 });
+    await sleep(700);
 
-  try {
+    const pwdSelectors = [
+      'input[type="password"]',
+      'input[name="password"]',
+      'input[placeholder*="assword" i]'
+    ];
+    let pwdInput = null;
+    for (const sel of pwdSelectors) {
+      pwdInput = await page.$(sel);
+      if (pwdInput) { console.log('Found password input:', sel); break; }
+    }
+    if (!pwdInput) {
+      console.log('No password input found!');
+      await browser.close();
+      process.exit(1);
+    }
+
+    await pwdInput.click({ clickCount: 3 });
+    await page.keyboard.type(password, { delay: 80 });
+    await sleep(700);
+
+    // Wait for Cloudflare Turnstile to auto-solve before submitting
+    console.log('Waiting for Turnstile to auto-solve...');
     await page.waitForFunction(
-      () => !window.location.href.includes('/login'),
-      { timeout: 25000 }
-    );
-  } catch (e) {
-    console.log('Still on login page after wait. URL:', page.url());
+      () => {
+        const inputs = document.querySelectorAll('input[name="cf-turnstile-response"]');
+        for (const input of inputs) {
+          if (input.value && input.value.length > 0) return true;
+        }
+        return false;
+      },
+      { timeout: 20000 }
+    ).catch(() => console.log('Turnstile did not auto-solve in 20s, submitting anyway'));
+
+    const turnstileVal = await page.evaluate(() => {
+      const inp = document.querySelector('input[name="cf-turnstile-response"]');
+      return inp ? inp.value.substring(0, 30) + '...' : 'not found';
+    });
+    console.log('Turnstile value:', turnstileVal);
+
+    const loginBtn = await page.$('button[type="submit"]') || await page.$('.qu-bg--blue');
+    if (loginBtn) {
+      await loginBtn.click();
+      console.log('Clicked login button');
+    } else {
+      await page.keyboard.press('Enter');
+      console.log('Pressed Enter to submit');
+    }
+
+    try {
+      await page.waitForFunction(
+        () => !window.location.href.includes('/login'),
+        { timeout: 25000 }
+      );
+    } catch (e) {
+      console.log('Still on login page after wait. URL:', page.url());
+    }
+    await sleep(4000);
+    console.log('Post-login URL:', page.url());
+
+    // Verify login actually worked (no "Sign In" button visible)
+    const signInVisible = await page.evaluate(() => {
+      const btns = Array.from(document.querySelectorAll('button'));
+      return btns.some(b => b.textContent.trim() === 'Sign In');
+    });
+    if (signInVisible) {
+      console.log('ERROR: Login failed — Sign In button still visible');
+      const loginHtml = await page.evaluate(() => document.body.innerHTML.substring(0, 2000));
+      console.log('Page HTML:', loginHtml);
+      await browser.close();
+      process.exit(1);
+    }
+    console.log('Login verified: Sign In button not visible');
   }
-  await sleep(4000);
-  console.log('Post-login URL:', page.url());
 
   // Verify login state
   const isLoggedIn = await page.evaluate(() => {
