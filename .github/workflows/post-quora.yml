@@ -16,5 +16,19 @@ jobs:
   post-answer:
     runs-on: ubuntu-latest
     steps:
-      - name: Test runner
-        run: echo "Runner works! Chrome path:" && which google-chrome-stable || echo "chrome not at default path"
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Install dependencies (skip Chromium download)
+        run: npm install
+        env:
+          PUPPETEER_SKIP_CHROMIUM_DOWNLOAD: 'true'
+          PUPPETEER_SKIP_DOWNLOAD: 'true'
+      - name: Post answer to Quora
+        env:
+          QUORA_EMAIL: ${{ secrets.QUORA_EMAIL }}
+          QUORA_PASSWORD: ${{ secrets.QUORA_PASSWORD }}
+          QUESTION_URL: ${{ github.event.client_payload.question_url || inputs.question_url }}
+          ANSWER_TEXT: ${{ github.event.client_payload.answer_text || inputs.answer_text }}
+        run: node scripts/post-quora.js
