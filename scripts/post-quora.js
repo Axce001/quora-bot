@@ -9,37 +9,68 @@ const answerText = process.env.ANSWER_TEXT;
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
+async function waitForCloudflare(page, maxWait = 60000) {
+  const start = Date.now();
+  while (Date.now() - start < maxWait) {
+    const title = await page.title();
+    const url = page.url();
+    if (!title.includes('Just a moment') && !url.includes('challenges.cloudflare.com')) {
+      return true;
+    }
+    console.log('Waiting for Cloudflare... title:', title);
+    await sleep(3000);
+  }
+  return false;
+}
+
 (async () => {
   const browser = await puppeteer.launch({
-    headless: 'new',
-    args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-blink-features=AutomationControlled']
+    headless: false,
+    args: [
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+      '--disable-dev-shm-usage',
+      '--disable-blink-features=AutomationControlled',
+      '--window-size=1280,800',
+    ]
   });
 
   const page = await browser.newPage();
   await page.setViewport({ width: 1280, height: 800 });
   await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
 
-  // Remove webdriver flag
   await page.evaluateOnNewDocument(() => {
     Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+    window.chrome = { runtime: {}, loadTimes: () => {}, csi: () => {}, app: {} };
+    Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
+    Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
   });
 
   console.log('Navigating to Quora login...');
-  await page.goto('https://www.quora.com/login', { waitUntil: 'domcontentloaded', timeout: 30000 });
-  await sleep(5000);
+  await page.goto('https://www.quora.com/login', { waitUntil: 'domcontentloaded', timeout: 60000 });
 
-  console.log('Page URL:', page.url());
   console.log('Page title:', await page.title());
+  console.log('Page URL:', page.url());
 
-  // Log all visible inputs for debug
+  const cfPassed = await waitForCloudflare(page, 60000);
+  if (!cfPassed) {
+    console.log('ERROR: Cloudflare challenge not resolved after 60s');
+    const html = await page.evaluate(() => document.body.innerHTML.substring(0, 2000));
+    console.log('Page HTML:', html);
+    await browser.close();
+    process.exit(1);
+  }
+
+  console.log('Cloudflare passed! URL:', page.url());
+  await sleep(2000);
+
   const inputs = await page.evaluate(() => {
     return Array.from(document.querySelectorAll('input')).map(i => ({
-      type: i.type, name: i.name, placeholder: i.placeholder, id: i.id, className: i.className.substring(0,50)
+      type: i.type, name: i.name, placeholder: i.placeholder, id: i.id, className: i.className.substring(0, 50)
     }));
   });
   console.log('Inputs found:', JSON.stringify(inputs));
 
-  // Try multiple selectors for email
   const emailSelectors = [
     'input[type="email"]',
     'input[name="email"]',
@@ -51,7 +82,7 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
   let emailInput = null;
   for (const sel of emailSelectors) {
     try {
-      emailInput = await page.waitForSelector(sel, { timeout: 3000 });
+      emailInput = await page.waitForSelector(sel, { timeout: 5000 });
       if (emailInput) { console.log('Found email input:', sel); break; }
     } catch (e) {}
   }
@@ -68,7 +99,6 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
   await page.keyboard.type(email, { delay: 80 });
   await sleep(700);
 
-  // Password
   const pwdSelectors = ['input[type="password"]', 'input[name="password"]', 'input[placeholder*="assword" i]'];
   let pwdInput = null;
   for (const sel of pwdSelectors) {
@@ -81,7 +111,6 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
   await page.keyboard.type(password, { delay: 80 });
   await sleep(700);
 
-  // Submit
   const loginBtn = await page.$('button[type="submit"]') || await page.$('.qu-bg--blue');
   if (loginBtn) {
     await loginBtn.click();
@@ -91,7 +120,6 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
     console.log('Pressed Enter');
   }
 
-  // Wait for URL change
   try {
     await page.waitForFunction(() => !window.location.href.includes('/login'), { timeout: 25000 });
   } catch (e) {
@@ -102,9 +130,9 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
 
   console.log('Navigating to question...');
   await page.goto(questionUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+  await waitForCloudflare(page, 30000);
   await sleep(4000);
 
-  // Click Answer button
   const buttons = await page.$$('button');
   let answerBtn = null;
   for (const btn of buttons) {
