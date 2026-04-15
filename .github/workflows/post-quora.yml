@@ -29,6 +29,7 @@ jobs:
         env:
           QUORA_EMAIL: ${{ secrets.QUORA_EMAIL }}
           QUORA_PASSWORD: ${{ secrets.QUORA_PASSWORD }}
+          QUORA_COOKIES: ${{ secrets.QUORA_COOKIES }}
           QUESTION_URL: ${{ github.event.client_payload.question_url || inputs.question_url }}
           ANSWER_TEXT: ${{ github.event.client_payload.answer_text || inputs.answer_text }}
         run: node scripts/post-quora.js
