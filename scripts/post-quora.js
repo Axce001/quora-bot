@@ -1,5 +1,6 @@
 const puppeteer = require('puppeteer-extra');
 const StealthPlugin = require('puppeteer-extra-plugin-stealth');
+const { execSync } = require('child_process');
 puppeteer.use(StealthPlugin());
 
 const email = process.env.QUORA_EMAIL;
@@ -8,6 +9,20 @@ const questionUrl = process.env.QUESTION_URL;
 const answerText = process.env.ANSWER_TEXT;
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+// Start Xvfb from within the script so no workflow YAML changes needed.
+// ubuntu-latest runners have Xvfb pre-installed.
+function startXvfb() {
+  try {
+    execSync('pkill Xvfb || true', { stdio: 'ignore' });
+    execSync('Xvfb :99 -screen 0 1280x800x24 -ac &', { stdio: 'ignore', shell: true });
+    execSync('sleep 2');
+    process.env.DISPLAY = ':99';
+    console.log('Xvfb started on :99');
+  } catch (e) {
+    console.log('Xvfb start failed (may not be needed):', e.message);
+  }
+}
 
 async function waitForCloudflare(page, maxWait = 60000) {
   const start = Date.now();
@@ -24,6 +39,9 @@ async function waitForCloudflare(page, maxWait = 60000) {
 }
 
 (async () => {
+  // Start virtual display so Chrome runs non-headless (much harder to detect)
+  startXvfb();
+
   const browser = await puppeteer.launch({
     headless: false,
     args: [
@@ -37,7 +55,9 @@ async function waitForCloudflare(page, maxWait = 60000) {
 
   const page = await browser.newPage();
   await page.setViewport({ width: 1280, height: 800 });
-  await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
+  await page.setUserAgent(
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+  );
 
   await page.evaluateOnNewDocument(() => {
     Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
@@ -54,7 +74,7 @@ async function waitForCloudflare(page, maxWait = 60000) {
 
   const cfPassed = await waitForCloudflare(page, 60000);
   if (!cfPassed) {
-    console.log('ERROR: Cloudflare challenge not resolved after 60s');
+    console.log('ERROR: Cloudflare challenge did not resolve after 60s');
     const html = await page.evaluate(() => document.body.innerHTML.substring(0, 2000));
     console.log('Page HTML:', html);
     await browser.close();
@@ -64,11 +84,12 @@ async function waitForCloudflare(page, maxWait = 60000) {
   console.log('Cloudflare passed! URL:', page.url());
   await sleep(2000);
 
-  const inputs = await page.evaluate(() => {
-    return Array.from(document.querySelectorAll('input')).map(i => ({
-      type: i.type, name: i.name, placeholder: i.placeholder, id: i.id, className: i.className.substring(0, 50)
-    }));
-  });
+  const inputs = await page.evaluate(() =>
+    Array.from(document.querySelectorAll('input')).map(i => ({
+      type: i.type, name: i.name, placeholder: i.placeholder, id: i.id,
+      className: i.className.substring(0, 50)
+    }))
+  );
   console.log('Inputs found:', JSON.stringify(inputs));
 
   const emailSelectors = [
@@ -99,13 +120,21 @@ async function waitForCloudflare(page, maxWait = 60000) {
   await page.keyboard.type(email, { delay: 80 });
   await sleep(700);
 
-  const pwdSelectors = ['input[type="password"]', 'input[name="password"]', 'input[placeholder*="assword" i]'];
+  const pwdSelectors = [
+    'input[type="password"]',
+    'input[name="password"]',
+    'input[placeholder*="assword" i]'
+  ];
   let pwdInput = null;
   for (const sel of pwdSelectors) {
     pwdInput = await page.$(sel);
     if (pwdInput) { console.log('Found password input:', sel); break; }
   }
-  if (!pwdInput) { console.log('No password input!'); await browser.close(); process.exit(1); }
+  if (!pwdInput) {
+    console.log('No password input found!');
+    await browser.close();
+    process.exit(1);
+  }
 
   await pwdInput.click({ clickCount: 3 });
   await page.keyboard.type(password, { delay: 80 });
@@ -117,18 +146,21 @@ async function waitForCloudflare(page, maxWait = 60000) {
     console.log('Clicked login button');
   } else {
     await page.keyboard.press('Enter');
-    console.log('Pressed Enter');
+    console.log('Pressed Enter to submit');
   }
 
   try {
-    await page.waitForFunction(() => !window.location.href.includes('/login'), { timeout: 25000 });
+    await page.waitForFunction(
+      () => !window.location.href.includes('/login'),
+      { timeout: 25000 }
+    );
   } catch (e) {
     console.log('Still on login page after wait. URL:', page.url());
   }
   await sleep(4000);
   console.log('Post-login URL:', page.url());
 
-  console.log('Navigating to question...');
+  console.log('Navigating to question:', questionUrl);
   await page.goto(questionUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
   await waitForCloudflare(page, 30000);
   await sleep(4000);
@@ -142,6 +174,8 @@ async function waitForCloudflare(page, maxWait = 60000) {
   if (answerBtn) {
     await answerBtn.click();
     console.log('Clicked Answer button');
+  } else {
+    console.log('Answer button not found');
   }
   await sleep(3000);
 
