@@ -161,22 +161,67 @@ async function waitForCloudflare(page, maxWait = 60000) {
   await sleep(4000);
   console.log('Post-login URL:', page.url());
 
+  // Verify login state
+  const isLoggedIn = await page.evaluate(() => {
+    return !document.querySelector('[href="/login"]') || !!document.querySelector('[class*="UserAvatar"]') || !!document.querySelector('[class*="avatar"]');
+  });
+  console.log('Logged in check:', isLoggedIn, '| URL:', page.url());
+
   console.log('Navigating to question:', questionUrl);
   await page.goto(questionUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
   await waitForCloudflare(page, 30000);
-  await sleep(4000);
+  await sleep(5000);
 
-  const buttons = await page.$$('button');
+  console.log('Question page URL:', page.url());
+
+  // Dump all clickable elements for debugging
+  const clickables = await page.evaluate(() => {
+    const els = Array.from(document.querySelectorAll('button, a[role="button"], div[role="button"], span[role="button"]'));
+    return els.slice(0, 30).map(el => ({
+      tag: el.tagName,
+      role: el.getAttribute('role'),
+      text: el.textContent.trim().substring(0, 50),
+      ariaLabel: el.getAttribute('aria-label')
+    }));
+  });
+  console.log('Clickable elements:', JSON.stringify(clickables));
+
+  // Try multiple strategies to find Answer button
   let answerBtn = null;
-  for (const btn of buttons) {
+
+  // Strategy 1: button with text "Answer"
+  const allBtnsCheck = await page.$$('button');
+  for (const btn of allBtnsCheck) {
     const text = await page.evaluate(el => el.textContent.trim(), btn);
+    console.log('Button text:', text.substring(0, 40));
     if (text === 'Answer' || text.startsWith('Answer')) { answerBtn = btn; break; }
   }
+
+  // Strategy 2: any element with role="button" containing "Answer"
+  if (!answerBtn) {
+    answerBtn = await page.evaluateHandle(() => {
+      const all = Array.from(document.querySelectorAll('[role="button"], button, a'));
+      return all.find(el => el.textContent.trim() === 'Answer' || el.getAttribute('aria-label') === 'Answer') || null;
+    });
+    const isNull = await page.evaluate(el => el === null, answerBtn);
+    if (isNull) answerBtn = null;
+  }
+
+  // Strategy 3: look for answer-related class names
+  if (!answerBtn) {
+    answerBtn = await page.$('[class*="AnswerButton"], [class*="answer-button"], [data-functional-selector*="answer"]');
+  }
+
   if (answerBtn) {
     await answerBtn.click();
     console.log('Clicked Answer button');
   } else {
-    console.log('Answer button not found');
+    // Strategy 4: try clicking where answer button typically is and see if editor appears
+    console.log('Answer button not found via selectors — trying page screenshot dump');
+    const bodyHtml = await page.evaluate(() => document.body.innerHTML.substring(0, 3000));
+    console.log('Page HTML snippet:', bodyHtml);
+    await browser.close();
+    process.exit(1);
   }
   await sleep(3000);
 
@@ -187,7 +232,9 @@ async function waitForCloudflare(page, maxWait = 60000) {
     await page.keyboard.type(answerText, { delay: 20 });
     console.log('Answer typed!');
   } else {
-    console.log('Editor not found');
+    console.log('Editor not found — dumping HTML');
+    const bodyHtml = await page.evaluate(() => document.body.innerHTML.substring(0, 3000));
+    console.log('Page HTML:', bodyHtml);
     await browser.close();
     process.exit(1);
   }
