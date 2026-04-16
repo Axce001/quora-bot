@@ -1,17 +1,19 @@
 name: Post Quora Answer
 on:
+  schedule:
+    - cron: '0 * * * *'
   repository_dispatch:
     types: [post-answer]
   workflow_dispatch:
     inputs:
       question_url:
-        description: Question URL
-        required: true
-        default: https://www.quora.com/What-are-the-best-apps-for-anonymous-chat
+        description: Question URL (leave blank for auto-rotation)
+        required: false
+        default: ''
       answer_text:
-        description: Answer text
-        required: true
-        default: Whisprr is a great anonymous chat app at whisprrchat.com
+        description: Answer text (leave blank for auto-rotation)
+        required: false
+        default: ''
 jobs:
   post-answer:
     runs-on: ubuntu-latest
@@ -27,9 +29,8 @@ jobs:
           PUPPETEER_SKIP_DOWNLOAD: 'true'
       - name: Post answer to Quora
         env:
-          QUORA_EMAIL: ${{ secrets.QUORA_EMAIL }}
-          QUORA_PASSWORD: ${{ secrets.QUORA_PASSWORD }}
           QUORA_COOKIES: ${{ secrets.QUORA_COOKIES }}
+          QUORA_COOKIES_2: ${{ secrets.QUORA_COOKIES_2 }}
           QUESTION_URL: ${{ github.event.client_payload.question_url || inputs.question_url }}
           ANSWER_TEXT: ${{ github.event.client_payload.answer_text || inputs.answer_text }}
         run: node scripts/post-quora.js
