@@ -7,11 +7,10 @@ const email = process.env.QUORA_EMAIL;
 const password = process.env.QUORA_PASSWORD;
 const questionUrl = process.env.QUESTION_URL;
 const answerText = process.env.ANSWER_TEXT;
+const quoraCookies = process.env.QUORA_COOKIES;
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
-// Start Xvfb from within the script so no workflow YAML changes needed.
-// ubuntu-latest runners have Xvfb pre-installed.
 function startXvfb() {
   try {
     execSync('pkill Xvfb || true', { stdio: 'ignore' });
@@ -20,7 +19,7 @@ function startXvfb() {
     process.env.DISPLAY = ':99';
     console.log('Xvfb started on :99');
   } catch (e) {
-    console.log('Xvfb start failed (may not be needed):', e.message);
+    console.log('Xvfb start failed:', e.message);
   }
 }
 
@@ -38,8 +37,33 @@ async function waitForCloudflare(page, maxWait = 60000) {
   return false;
 }
 
+// Wait for Quora's React SPA to fully mount
+async function waitForSpaMount(page, maxWait = 30000) {
+  console.log('Waiting for Quora SPA to mount...');
+  try {
+    await page.waitForFunction(
+      () => {
+        // Check if React SPA has mounted (#root has children)
+        const root = document.getElementById('root');
+        if (!root || root.children.length === 0) return false;
+        // Check Quora's own render-complete flag
+        if (window.initialRenderComplete === false) return false;
+        // Make sure it's not showing the error state
+        const errDiv = document.getElementById('staticError');
+        if (errDiv && errDiv.style.display !== 'none' && errDiv.offsetParent !== null) return false;
+        return true;
+      },
+      { timeout: maxWait }
+    );
+    console.log('SPA mounted successfully');
+    return true;
+  } catch (e) {
+    console.log('SPA mount timeout after', maxWait, 'ms');
+    return false;
+  }
+}
+
 (async () => {
-  // Start virtual display so Chrome runs non-headless (much harder to detect)
   startXvfb();
 
   const browser = await puppeteer.launch({
@@ -51,6 +75,7 @@ async function waitForCloudflare(page, maxWait = 60000) {
       '--disable-dev-shm-usage',
       '--disable-blink-features=AutomationControlled',
       '--window-size=1280,800',
+      '--disable-features=IsolateOrigins',
     ]
   });
 
@@ -59,7 +84,6 @@ async function waitForCloudflare(page, maxWait = 60000) {
   await page.setUserAgent(
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
   );
-
   await page.evaluateOnNewDocument(() => {
     Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
     window.chrome = { runtime: {}, loadTimes: () => {}, csi: () => {}, app: {} };
@@ -67,87 +91,66 @@ async function waitForCloudflare(page, maxWait = 60000) {
     Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
   });
 
-  console.log('Navigating to Quora login...');
-  await page.goto('https://www.quora.com/login', { waitUntil: 'domcontentloaded', timeout: 60000 });
-
-  console.log('Page title:', await page.title());
-  console.log('Page URL:', page.url());
-
-  const cfPassed = await waitForCloudflare(page, 60000);
-  if (!cfPassed) {
-    console.log('ERROR: Cloudflare challenge did not resolve after 60s');
-    const html = await page.evaluate(() => document.body.innerHTML.substring(0, 2000));
-    console.log('Page HTML:', html);
-    await browser.close();
-    process.exit(1);
-  }
-
-  console.log('Cloudflare passed! URL:', page.url());
-  await sleep(2000);
-
-  const inputs = await page.evaluate(() =>
-    Array.from(document.querySelectorAll('input')).map(i => ({
-      type: i.type, name: i.name, placeholder: i.placeholder, id: i.id,
-      className: i.className.substring(0, 50)
-    }))
-  );
-  console.log('Inputs found:', JSON.stringify(inputs));
-
-  const emailSelectors = [
-    'input[type="email"]',
-    'input[name="email"]',
-    'input[placeholder*="mail" i]',
-    'input[data-field-name="email"]',
-    'input.qu-borderAll'
-  ];
-
-  let emailInput = null;
-  for (const sel of emailSelectors) {
-    try {
-      emailInput = await page.waitForSelector(sel, { timeout: 5000 });
-      if (emailInput) { console.log('Found email input:', sel); break; }
-    } catch (e) {}
-  }
-
-  if (!emailInput) {
-    console.log('No email input found. Page HTML snippet:');
-    const html = await page.evaluate(() => document.body.innerHTML.substring(0, 2000));
-    console.log(html);
-    await browser.close();
-    process.exit(1);
-  }
-
-  // If pre-loaded cookies are available, use them instead of login
-  const quoraCookies = process.env.QUORA_COOKIES;
+  // --- AUTH PATH ---
   if (quoraCookies) {
+    // Cookie path: skip login page entirely
+    console.log('QUORA_COOKIES found — using cookie-based auth');
     try {
       const cookies = JSON.parse(quoraCookies);
+      // Set cookies before navigating
+      await page.goto('https://www.quora.com/', { waitUntil: 'domcontentloaded', timeout: 60000 });
+      await waitForCloudflare(page, 60000);
       await page.setCookie(...cookies);
-      console.log('Loaded', cookies.length, 'cookies from QUORA_COOKIES env');
+      console.log('Injected', cookies.length, 'cookies');
+      // Reload to activate session
       await page.goto('https://www.quora.com/', { waitUntil: 'domcontentloaded', timeout: 30000 });
       await sleep(3000);
-      console.log('Cookie-based auth URL:', page.url());
-    } catch(e) {
-      console.log('Cookie load failed, falling back to login:', e.message);
+      console.log('Post-cookie URL:', page.url());
+    } catch (e) {
+      console.log('Cookie injection failed:', e.message);
+      await browser.close();
+      process.exit(1);
     }
   } else {
-    // Login flow
+    // Login form path
+    console.log('No QUORA_COOKIES — using login form');
+    await page.goto('https://www.quora.com/login', { waitUntil: 'domcontentloaded', timeout: 60000 });
+    const cfPassed = await waitForCloudflare(page, 60000);
+    if (!cfPassed) {
+      console.log('ERROR: Cloudflare did not resolve');
+      await browser.close();
+      process.exit(1);
+    }
+    await sleep(2000);
+
+    const emailSelectors = [
+      'input[type="email"]', 'input[name="email"]',
+      'input[placeholder*="mail" i]', 'input.qu-borderAll'
+    ];
+    let emailInput = null;
+    for (const sel of emailSelectors) {
+      try {
+        emailInput = await page.waitForSelector(sel, { timeout: 5000 });
+        if (emailInput) { console.log('Email input:', sel); break; }
+      } catch (e) {}
+    }
+    if (!emailInput) {
+      console.log('No email input. HTML:', await page.evaluate(() => document.body.innerHTML.substring(0, 2000)));
+      await browser.close();
+      process.exit(1);
+    }
+
     await emailInput.click({ clickCount: 3 });
     await page.keyboard.type(email, { delay: 80 });
     await sleep(700);
 
-    const pwdSelectors = [
-      'input[type="password"]',
-      'input[name="password"]',
-      'input[placeholder*="assword" i]'
-    ];
     let pwdInput = null;
-    for (const sel of pwdSelectors) {
+    for (const sel of ['input[type="password"]', 'input[name="password"]', 'input[placeholder*="assword" i]']) {
       pwdInput = await page.$(sel);
-      if (pwdInput) { console.log('Found password input:', sel); break; }
+      if (pwdInput) { console.log('Password input:', sel); break; }
     }
     if (!pwdInput) {
-      console.log('No password input found!');
+      console.log('No password input!');
       await browser.close();
       process.exit(1);
     }
@@ -156,97 +159,94 @@ async function waitForCloudflare(page, maxWait = 60000) {
     await page.keyboard.type(password, { delay: 80 });
     await sleep(700);
 
-    // Wait for Cloudflare Turnstile to auto-solve before submitting
-    console.log('Waiting for Turnstile to auto-solve...');
+    console.log('Waiting for Turnstile...');
     await page.waitForFunction(
       () => {
-        const inputs = document.querySelectorAll('input[name="cf-turnstile-response"]');
-        for (const input of inputs) {
-          if (input.value && input.value.length > 0) return true;
-        }
-        return false;
+        const inp = document.querySelector('input[name="cf-turnstile-response"]');
+        return inp && inp.value && inp.value.length > 0;
       },
       { timeout: 20000 }
-    ).catch(() => console.log('Turnstile did not auto-solve in 20s, submitting anyway'));
-
-    const turnstileVal = await page.evaluate(() => {
-      const inp = document.querySelector('input[name="cf-turnstile-response"]');
-      return inp ? inp.value.substring(0, 30) + '...' : 'not found';
-    });
-    console.log('Turnstile value:', turnstileVal);
+    ).catch(() => console.log('Turnstile did not solve, submitting anyway'));
 
     const loginBtn = await page.$('button[type="submit"]') || await page.$('.qu-bg--blue');
-    if (loginBtn) {
-      await loginBtn.click();
-      console.log('Clicked login button');
-    } else {
-      await page.keyboard.press('Enter');
-      console.log('Pressed Enter to submit');
-    }
+    if (loginBtn) { await loginBtn.click(); console.log('Clicked login'); }
+    else { await page.keyboard.press('Enter'); console.log('Pressed Enter'); }
 
     try {
-      await page.waitForFunction(
-        () => !window.location.href.includes('/login'),
-        { timeout: 25000 }
-      );
-    } catch (e) {
-      console.log('Still on login page after wait. URL:', page.url());
-    }
+      await page.waitForFunction(() => !window.location.href.includes('/login'), { timeout: 25000 });
+    } catch (e) { console.log('Still on login after wait. URL:', page.url()); }
     await sleep(4000);
     console.log('Post-login URL:', page.url());
 
-    // Verify login actually worked (no "Sign In" button visible)
-    const signInVisible = await page.evaluate(() => {
-      const btns = Array.from(document.querySelectorAll('button'));
-      return btns.some(b => b.textContent.trim() === 'Sign In');
-    });
+    const signInVisible = await page.evaluate(() =>
+      Array.from(document.querySelectorAll('button')).some(b => b.textContent.trim() === 'Sign In')
+    );
     if (signInVisible) {
-      console.log('ERROR: Login failed — Sign In button still visible');
-      const loginHtml = await page.evaluate(() => document.body.innerHTML.substring(0, 2000));
-      console.log('Page HTML:', loginHtml);
+      console.log('ERROR: Login failed — Sign In still visible');
       await browser.close();
       process.exit(1);
     }
-    console.log('Login verified: Sign In button not visible');
+    console.log('Login verified');
   }
 
-  // Verify login state
-  const isLoggedIn = await page.evaluate(() => {
-    return !document.querySelector('[href="/login"]') || !!document.querySelector('[class*="UserAvatar"]') || !!document.querySelector('[class*="avatar"]');
-  });
-  console.log('Logged in check:', isLoggedIn, '| URL:', page.url());
+  // --- NAVIGATE TO QUESTION ---
+  // Convert quora.com URL to canonical form (strip /unanswered/ if present)
+  const canonicalUrl = questionUrl.replace('https://www.quora.com/unanswered/', 'https://www.quora.com/');
+  console.log('Navigating to question:', canonicalUrl);
 
-  console.log('Navigating to question:', questionUrl);
-  await page.goto(questionUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
-  await waitForCloudflare(page, 30000);
-  await sleep(5000);
+  let spaOk = false;
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    console.log(`Navigation attempt ${attempt}/3`);
+    await page.goto(canonicalUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    await waitForCloudflare(page, 30000);
+    console.log('Question page URL:', page.url());
 
-  console.log('Question page URL:', page.url());
+    spaOk = await waitForSpaMount(page, 20000);
+    if (spaOk) break;
 
-  // Dump all clickable elements for debugging
-  const clickables = await page.evaluate(() => {
-    const els = Array.from(document.querySelectorAll('button, a[role="button"], div[role="button"], span[role="button"]'));
-    return els.slice(0, 30).map(el => ({
-      tag: el.tagName,
-      role: el.getAttribute('role'),
-      text: el.textContent.trim().substring(0, 50),
-      ariaLabel: el.getAttribute('aria-label')
-    }));
-  });
+    // SPA failed — try scrolling/interacting to trigger re-render
+    console.log('SPA not mounted, trying page interaction...');
+    await page.evaluate(() => window.scrollTo(0, 200));
+    await sleep(3000);
+    spaOk = await waitForSpaMount(page, 10000);
+    if (spaOk) break;
+
+    if (attempt < 3) {
+      console.log('Retrying navigation...');
+      await sleep(5000);
+    }
+  }
+
+  if (!spaOk) {
+    console.log('SPA failed to mount after 3 attempts. Dumping page state:');
+    const html = await page.evaluate(() => document.body.innerHTML.substring(0, 3000));
+    console.log('HTML:', html);
+    await browser.close();
+    process.exit(1);
+  }
+
+  // Dump clickable elements
+  const clickables = await page.evaluate(() =>
+    Array.from(document.querySelectorAll('button, a[role="button"], div[role="button"], span[role="button"]'))
+      .slice(0, 30).map(el => ({
+        tag: el.tagName,
+        text: el.textContent.trim().substring(0, 50),
+        ariaLabel: el.getAttribute('aria-label')
+      }))
+  );
   console.log('Clickable elements:', JSON.stringify(clickables));
 
-  // Try multiple strategies to find Answer button
+  // --- FIND ANSWER BUTTON ---
   let answerBtn = null;
 
-  // Strategy 1: button with text "Answer"
-  const allBtnsCheck = await page.$$('button');
-  for (const btn of allBtnsCheck) {
+  // Strategy 1: button text match
+  const allBtns = await page.$$('button');
+  for (const btn of allBtns) {
     const text = await page.evaluate(el => el.textContent.trim(), btn);
-    console.log('Button text:', text.substring(0, 40));
     if (text === 'Answer' || text.startsWith('Answer')) { answerBtn = btn; break; }
   }
 
-  // Strategy 2: any element with role="button" containing "Answer"
+  // Strategy 2: aria-label or role
   if (!answerBtn) {
     answerBtn = await page.evaluateHandle(() => {
       const all = Array.from(document.querySelectorAll('[role="button"], button, a'));
@@ -256,45 +256,43 @@ async function waitForCloudflare(page, maxWait = 60000) {
     if (isNull) answerBtn = null;
   }
 
-  // Strategy 3: look for answer-related class names
+  // Strategy 3: class selectors
   if (!answerBtn) {
     answerBtn = await page.$('[class*="AnswerButton"], [class*="answer-button"], [data-functional-selector*="answer"]');
   }
 
-  if (answerBtn) {
-    await answerBtn.click();
-    console.log('Clicked Answer button');
-  } else {
-    // Strategy 4: try clicking where answer button typically is and see if editor appears
-    console.log('Answer button not found via selectors — trying page screenshot dump');
-    const bodyHtml = await page.evaluate(() => document.body.innerHTML.substring(0, 3000));
-    console.log('Page HTML snippet:', bodyHtml);
+  if (!answerBtn) {
+    console.log('Answer button not found. Page HTML:');
+    console.log(await page.evaluate(() => document.body.innerHTML.substring(0, 3000)));
     await browser.close();
     process.exit(1);
   }
+
+  await answerBtn.click();
+  console.log('Clicked Answer button');
   await sleep(3000);
 
+  // --- TYPE ANSWER ---
   const editor = await page.$('[contenteditable="true"]');
-  if (editor) {
-    await editor.click();
-    await sleep(500);
-    await page.keyboard.type(answerText, { delay: 20 });
-    console.log('Answer typed!');
-  } else {
-    console.log('Editor not found — dumping HTML');
-    const bodyHtml = await page.evaluate(() => document.body.innerHTML.substring(0, 3000));
-    console.log('Page HTML:', bodyHtml);
+  if (!editor) {
+    console.log('Editor not found. HTML:', await page.evaluate(() => document.body.innerHTML.substring(0, 3000)));
     await browser.close();
     process.exit(1);
   }
+
+  await editor.click();
+  await sleep(500);
+  await page.keyboard.type(answerText, { delay: 20 });
+  console.log('Answer typed!');
   await sleep(1500);
 
-  const allBtns = await page.$$('button');
-  for (const btn of allBtns) {
+  // --- SUBMIT ---
+  const submitBtns = await page.$$('button');
+  for (const btn of submitBtns) {
     const text = await page.evaluate(el => el.textContent.trim(), btn);
     if (text === 'Submit' || text === 'Post') {
       await btn.click();
-      console.log('Submitted!');
+      console.log('Submitted answer!');
       break;
     }
   }
