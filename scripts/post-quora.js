@@ -3,11 +3,21 @@ const StealthPlugin = require('puppeteer-extra-plugin-stealth');
 const { execSync } = require('child_process');
 puppeteer.use(StealthPlugin());
 
-const email = process.env.QUORA_EMAIL;
-const password = process.env.QUORA_PASSWORD;
 const questionUrl = process.env.QUESTION_URL;
 const answerText = process.env.ANSWER_TEXT;
-const quoraCookies = process.env.QUORA_COOKIES;
+
+// Multi-account: pick a random account from available cookie sets
+const cookieSets = [];
+for (let i = 1; i <= 10; i++) {
+  const key = i === 1 ? process.env.QUORA_COOKIES : process.env[`QUORA_COOKIES_${i}`];
+  if (key) cookieSets.push(key);
+}
+if (cookieSets.length === 0) {
+  console.log('ERROR: No QUORA_COOKIES found');
+  process.exit(1);
+}
+const quoraCookies = cookieSets[Math.floor(Math.random() * cookieSets.length)];
+console.log(`Using account ${cookieSets.indexOf(quoraCookies) + 1} of ${cookieSets.length}`);
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
@@ -37,7 +47,6 @@ async function waitForCloudflare(page, maxWait = 60000) {
   return false;
 }
 
-// Wait for Quora answer button to appear (confirms question page loaded + logged in)
 async function waitForAnswerButton(page, maxWait = 45000) {
   console.log('Waiting for Answer button...');
   try {
@@ -85,129 +94,43 @@ async function waitForAnswerButton(page, maxWait = 45000) {
     Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
   });
 
-  // --- AUTH PATH ---
-  if (quoraCookies) {
-    // Cookie path: skip login page entirely
-    console.log('QUORA_COOKIES found — using cookie-based auth');
-    try {
-      const cookies = JSON.parse(quoraCookies);
-      // Fix cookie domains: add leading dot so cookies work on www.quora.com
-      const fixedCookies = cookies.map(c => ({
-        ...c,
-        domain: c.domain.startsWith('.') ? c.domain : ('.' + c.domain.replace(/^www\./, ''))
-      }));
-      // Navigate first to get Cloudflare clearance
-      await page.goto('https://www.quora.com/', { waitUntil: 'domcontentloaded', timeout: 60000 });
-      await waitForCloudflare(page, 60000);
-      await page.setCookie(...fixedCookies);
-      console.log('Injected', fixedCookies.length, 'cookies with fixed domains');
-      // Reload to activate session
-      await page.goto('https://www.quora.com/', { waitUntil: 'networkidle2', timeout: 60000 });
-      await sleep(5000);
-      console.log('Post-cookie URL:', page.url());
-      // Verify login
-      const isLoggedIn = await page.evaluate(() => {
-        const btns = Array.from(document.querySelectorAll('button, a'));
-        const hasSignIn = btns.some(el => el.textContent.trim() === 'Sign In');
-        return !hasSignIn;
-      });
-      console.log('Login verified:', isLoggedIn);
-      if (!isLoggedIn) {
-        const html = await page.evaluate(() => document.body.innerHTML.substring(0, 1000));
-        console.log('Homepage HTML:', html);
-        await browser.close();
-        process.exit(1);
-      }
-    } catch (e) {
-      console.log('Cookie injection failed:', e.message);
+  // Cookie auth
+  console.log('Using cookie-based auth');
+  try {
+    const cookies = JSON.parse(quoraCookies);
+    const fixedCookies = cookies.map(c => ({
+      ...c,
+      domain: c.domain.startsWith('.') ? c.domain : ('.' + c.domain.replace(/^www\./, ''))
+    }));
+    await page.goto('https://www.quora.com/', { waitUntil: 'domcontentloaded', timeout: 60000 });
+    await waitForCloudflare(page, 60000);
+    await page.setCookie(...fixedCookies);
+    console.log('Injected', fixedCookies.length, 'cookies');
+    await page.goto('https://www.quora.com/', { waitUntil: 'networkidle2', timeout: 60000 });
+    await sleep(5000);
+    console.log('Post-cookie URL:', page.url());
+    const isLoggedIn = await page.evaluate(() => {
+      const btns = Array.from(document.querySelectorAll('button, a'));
+      return !btns.some(el => el.textContent.trim() === 'Sign In');
+    });
+    console.log('Login verified:', isLoggedIn);
+    if (!isLoggedIn) {
+      const html = await page.evaluate(() => document.body.innerHTML.substring(0, 1000));
+      console.log('Homepage HTML:', html);
       await browser.close();
       process.exit(1);
     }
-  } else {
-    // Login form path
-    console.log('No QUORA_COOKIES — using login form');
-    await page.goto('https://www.quora.com/login', { waitUntil: 'domcontentloaded', timeout: 60000 });
-    const cfPassed = await waitForCloudflare(page, 60000);
-    if (!cfPassed) {
-      console.log('ERROR: Cloudflare did not resolve');
-      await browser.close();
-      process.exit(1);
-    }
-    await sleep(2000);
-
-    const emailSelectors = [
-      'input[type="email"]', 'input[name="email"]',
-      'input[placeholder*="mail" i]', 'input.qu-borderAll'
-    ];
-    let emailInput = null;
-    for (const sel of emailSelectors) {
-      try {
-        emailInput = await page.waitForSelector(sel, { timeout: 5000 });
-        if (emailInput) { console.log('Email input:', sel); break; }
-      } catch (e) {}
-    }
-    if (!emailInput) {
-      console.log('No email input. HTML:', await page.evaluate(() => document.body.innerHTML.substring(0, 2000)));
-      await browser.close();
-      process.exit(1);
-    }
-
-    await emailInput.click({ clickCount: 3 });
-    await page.keyboard.type(email, { delay: 80 });
-    await sleep(700);
-
-    let pwdInput = null;
-    for (const sel of ['input[type="password"]', 'input[name="password"]', 'input[placeholder*="assword" i]']) {
-      pwdInput = await page.$(sel);
-      if (pwdInput) { console.log('Password input:', sel); break; }
-    }
-    if (!pwdInput) {
-      console.log('No password input!');
-      await browser.close();
-      process.exit(1);
-    }
-
-    await pwdInput.click({ clickCount: 3 });
-    await page.keyboard.type(password, { delay: 80 });
-    await sleep(700);
-
-    console.log('Waiting for Turnstile...');
-    await page.waitForFunction(
-      () => {
-        const inp = document.querySelector('input[name="cf-turnstile-response"]');
-        return inp && inp.value && inp.value.length > 0;
-      },
-      { timeout: 20000 }
-    ).catch(() => console.log('Turnstile did not solve, submitting anyway'));
-
-    const loginBtn = await page.$('button[type="submit"]') || await page.$('.qu-bg--blue');
-    if (loginBtn) { await loginBtn.click(); console.log('Clicked login'); }
-    else { await page.keyboard.press('Enter'); console.log('Pressed Enter'); }
-
-    try {
-      await page.waitForFunction(() => !window.location.href.includes('/login'), { timeout: 25000 });
-    } catch (e) { console.log('Still on login after wait. URL:', page.url()); }
-    await sleep(4000);
-    console.log('Post-login URL:', page.url());
-
-    const signInVisible = await page.evaluate(() =>
-      Array.from(document.querySelectorAll('button')).some(b => b.textContent.trim() === 'Sign In')
-    );
-    if (signInVisible) {
-      console.log('ERROR: Login failed — Sign In still visible');
-      await browser.close();
-      process.exit(1);
-    }
-    console.log('Login verified');
+  } catch (e) {
+    console.log('Cookie injection failed:', e.message);
+    await browser.close();
+    process.exit(1);
   }
 
-  // --- NAVIGATE TO QUESTION via search (avoids Cloudflare re-challenge on direct URL) ---
+  // Navigate to question via search
   const canonicalUrl = questionUrl.replace('https://www.quora.com/unanswered/', 'https://www.quora.com/');
-  // Extract slug for search
   const slug = canonicalUrl.split('/').pop().replace(/-/g, ' ');
   console.log('Searching for question:', slug);
 
-  // Strategy 1: Use Quora search to find question, then click (SPA navigation)
   let answerFound = false;
   try {
     await page.goto(`https://www.quora.com/search?q=${encodeURIComponent(slug)}&type=question`, {
@@ -217,14 +140,12 @@ async function waitForAnswerButton(page, maxWait = 45000) {
     await sleep(5000);
     console.log('Search URL:', page.url());
 
-    // Dump all question-style links for debugging
     const allLinks = await page.evaluate(() => {
       const seen = new Set();
       return Array.from(document.querySelectorAll('a[href]'))
         .map(a => ({ href: a.href, text: a.textContent.trim().substring(0, 60) }))
         .filter(l => {
           const path = l.href.replace('https://www.quora.com', '');
-          // Question URLs must: have 3+ hyphens, no sub-paths, not be nav pages
           const hyphenCount = (path.match(/-/g) || []).length;
           const isNavPage = /^\/(notifications|profile|settings|bookmarks|drafts|following|followers|answer|edit|ask|topics|spaces|login|signup|about)/.test(path);
           const isQuestionLike = path.match(/^\/[A-Za-z][A-Za-z0-9-]{15,}$/) && hyphenCount >= 3 && !isNavPage;
@@ -240,7 +161,6 @@ async function waitForAnswerButton(page, maxWait = 45000) {
     if (allLinks.length > 0) {
       const firstHref = allLinks[0].href;
       console.log('Clicking question link:', firstHref);
-      // Use evaluate to click via href to ensure correct element
       await page.evaluate((href) => {
         const link = Array.from(document.querySelectorAll('a[href]')).find(a => a.href === href);
         if (link) link.click();
@@ -255,7 +175,6 @@ async function waitForAnswerButton(page, maxWait = 45000) {
     console.log('Search strategy failed:', e.message);
   }
 
-  // Strategy 2: Direct URL (last resort)
   if (!answerFound) {
     console.log('Falling back to direct URL navigation...');
     await page.goto(canonicalUrl, { waitUntil: 'networkidle2', timeout: 60000 }).catch(() => {});
@@ -273,7 +192,6 @@ async function waitForAnswerButton(page, maxWait = 45000) {
     process.exit(1);
   }
 
-  // --- FIND AND CLICK ANSWER BUTTON ---
   await page.evaluate(() => {
     const all = Array.from(document.querySelectorAll('button, [role="button"]'));
     const btn = all.find(el => el.textContent.trim() === 'Answer' || el.getAttribute('aria-label') === 'Answer');
@@ -281,13 +199,11 @@ async function waitForAnswerButton(page, maxWait = 45000) {
   });
   console.log('Clicked Answer button');
 
-  // Handle any navigation triggered by the click
   try {
     await page.waitForNavigation({ timeout: 8000, waitUntil: 'domcontentloaded' });
     console.log('Navigated after click:', page.url());
     await waitForCloudflare(page, 30000);
     await sleep(5000);
-    // On question page now — wait for Answer button and click it
     const answerAgain = await waitForAnswerButton(page, 20000);
     if (answerAgain) {
       console.log('Clicking Answer button on question page');
@@ -301,7 +217,6 @@ async function waitForAnswerButton(page, maxWait = 45000) {
     console.log('No navigation occurred — expecting inline editor');
   }
 
-  // --- TYPE ANSWER ---
   await sleep(3000);
   page.setDefaultTimeout(15000);
   const editor = await page.$('[contenteditable="true"]').catch(() => null);
@@ -321,7 +236,6 @@ async function waitForAnswerButton(page, maxWait = 45000) {
   console.log('Answer typed!');
   await sleep(2000);
 
-  // --- SUBMIT ---
   const submitted = await page.evaluate(() => {
     const btns = Array.from(document.querySelectorAll('button'));
     const btn = btns.find(b => b.textContent.trim() === 'Submit' || b.textContent.trim() === 'Post');
