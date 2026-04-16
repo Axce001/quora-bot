@@ -62,6 +62,7 @@ async function waitForAnswerButton(page, maxWait = 45000) {
   const browser = await puppeteer.launch({
     headless: false,
     executablePath: '/usr/bin/google-chrome-stable',
+    protocolTimeout: 60000,
     args: [
       '--no-sandbox',
       '--disable-setuid-sandbox',
@@ -282,6 +283,7 @@ async function waitForAnswerButton(page, maxWait = 45000) {
   await sleep(3000);
 
   // --- TYPE ANSWER ---
+  await sleep(2000);
   const editor = await page.$('[contenteditable="true"]');
   if (!editor) {
     console.log('Editor not found. HTML:', await page.evaluate(() => document.body.innerHTML.substring(0, 3000)));
@@ -290,10 +292,15 @@ async function waitForAnswerButton(page, maxWait = 45000) {
   }
 
   await editor.click();
-  await sleep(500);
-  await page.keyboard.type(answerText, { delay: 20 });
+  await sleep(1000);
+  // Use execCommand to insert text (faster than keyboard simulation, avoids protocol timeout)
+  await page.evaluate((el, text) => {
+    el.focus();
+    document.execCommand('selectAll', false, null);
+    document.execCommand('insertText', false, text);
+  }, editor, answerText);
   console.log('Answer typed!');
-  await sleep(1500);
+  await sleep(2000);
 
   // --- SUBMIT ---
   const submitBtns = await page.$$('button');
