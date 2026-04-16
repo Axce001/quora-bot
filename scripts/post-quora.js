@@ -3,10 +3,11 @@ const StealthPlugin = require('puppeteer-extra-plugin-stealth');
 const { execSync } = require('child_process');
 puppeteer.use(StealthPlugin());
 
+const keyword = process.env.KEYWORD;
 const questionUrl = process.env.QUESTION_URL;
 const answerText = process.env.ANSWER_TEXT;
 
-// Multi-account: pick a random account from available cookie sets
+// Multi-account: pick random from available cookie sets
 const cookieSets = [];
 for (let i = 1; i <= 10; i++) {
   const key = i === 1 ? process.env.QUORA_COOKIES : process.env[`QUORA_COOKIES_${i}`];
@@ -18,6 +19,25 @@ if (cookieSets.length === 0) {
 }
 const quoraCookies = cookieSets[Math.floor(Math.random() * cookieSets.length)];
 console.log(`Using account ${cookieSets.indexOf(quoraCookies) + 1} of ${cookieSets.length}`);
+
+if (!answerText) {
+  console.log('ERROR: No ANSWER_TEXT provided');
+  process.exit(1);
+}
+
+// Determine search query
+let searchQuery;
+if (keyword) {
+  searchQuery = keyword;
+  console.log('Mode: keyword search —', keyword);
+} else if (questionUrl) {
+  const canonicalUrl = questionUrl.replace('https://www.quora.com/unanswered/', 'https://www.quora.com/');
+  searchQuery = canonicalUrl.split('/').pop().replace(/-/g, ' ');
+  console.log('Mode: question URL —', searchQuery);
+} else {
+  console.log('ERROR: No KEYWORD or QUESTION_URL provided');
+  process.exit(1);
+}
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
@@ -126,14 +146,10 @@ async function waitForAnswerButton(page, maxWait = 45000) {
     process.exit(1);
   }
 
-  // Navigate to question via search
-  const canonicalUrl = questionUrl.replace('https://www.quora.com/unanswered/', 'https://www.quora.com/');
-  const slug = canonicalUrl.split('/').pop().replace(/-/g, ' ');
-  console.log('Searching for question:', slug);
-
+  // Search Quora for keyword/question
   let answerFound = false;
   try {
-    await page.goto(`https://www.quora.com/search?q=${encodeURIComponent(slug)}&type=question`, {
+    await page.goto(`https://www.quora.com/search?q=${encodeURIComponent(searchQuery)}&type=question`, {
       waitUntil: 'networkidle2', timeout: 60000
     });
     await waitForCloudflare(page, 30000);
@@ -143,7 +159,7 @@ async function waitForAnswerButton(page, maxWait = 45000) {
     const allLinks = await page.evaluate(() => {
       const seen = new Set();
       return Array.from(document.querySelectorAll('a[href]'))
-        .map(a => ({ href: a.href, text: a.textContent.trim().substring(0, 60) }))
+        .map(a => ({ href: a.href, text: a.textContent.trim().substring(0, 80) }))
         .filter(l => {
           const path = l.href.replace('https://www.quora.com', '');
           const hyphenCount = (path.match(/-/g) || []).length;
@@ -159,12 +175,15 @@ async function waitForAnswerButton(page, maxWait = 45000) {
     console.log('Candidate question links:', JSON.stringify(allLinks));
 
     if (allLinks.length > 0) {
-      const firstHref = allLinks[0].href;
-      console.log('Clicking question link:', firstHref);
+      // Pick a random question from top 5 (keyword mode: more variety)
+      const picked = keyword
+        ? allLinks[Math.floor(Math.random() * allLinks.length)]
+        : allLinks[0];
+      console.log('Clicking question link:', picked.href);
       await page.evaluate((href) => {
         const link = Array.from(document.querySelectorAll('a[href]')).find(a => a.href === href);
         if (link) link.click();
-      }, firstHref);
+      }, picked.href);
       await sleep(6000);
       console.log('After click URL:', page.url());
       answerFound = await waitForAnswerButton(page, 30000);
@@ -175,7 +194,9 @@ async function waitForAnswerButton(page, maxWait = 45000) {
     console.log('Search strategy failed:', e.message);
   }
 
-  if (!answerFound) {
+  // Fallback: direct URL (only if QUESTION_URL was provided)
+  if (!answerFound && questionUrl) {
+    const canonicalUrl = questionUrl.replace('https://www.quora.com/unanswered/', 'https://www.quora.com/');
     console.log('Falling back to direct URL navigation...');
     await page.goto(canonicalUrl, { waitUntil: 'networkidle2', timeout: 60000 }).catch(() => {});
     await waitForCloudflare(page, 60000);
