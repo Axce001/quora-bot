@@ -200,29 +200,57 @@ async function waitForAnswerButton(page, maxWait = 45000) {
     console.log('Login verified');
   }
 
-  // --- NAVIGATE TO QUESTION ---
+  // --- NAVIGATE TO QUESTION via search (avoids Cloudflare re-challenge on direct URL) ---
   const canonicalUrl = questionUrl.replace('https://www.quora.com/unanswered/', 'https://www.quora.com/');
-  console.log('Navigating to question:', canonicalUrl);
+  // Extract slug for search
+  const slug = canonicalUrl.split('/').pop().replace(/-/g, ' ');
+  console.log('Searching for question:', slug);
 
+  // Strategy 1: Use Quora search to find question, then click (SPA navigation)
   let answerFound = false;
-  for (let attempt = 1; attempt <= 3; attempt++) {
-    console.log(`Navigation attempt ${attempt}/3`);
-    await page.goto(canonicalUrl, { waitUntil: 'networkidle2', timeout: 60000 }).catch(() => {});
+  try {
+    await page.goto(`https://www.quora.com/search?q=${encodeURIComponent(slug)}&type=question`, {
+      waitUntil: 'networkidle2', timeout: 60000
+    });
     await waitForCloudflare(page, 30000);
-    console.log('Question page URL:', page.url());
     await sleep(3000);
+    console.log('Search URL:', page.url());
 
-    answerFound = await waitForAnswerButton(page, 40000);
-    if (answerFound) break;
+    // Find question link in search results
+    const questionLink = await page.evaluateHandle((slug) => {
+      const links = Array.from(document.querySelectorAll('a[href*="/"]'));
+      return links.find(a => {
+        const href = a.href || '';
+        // Match question URL pattern (not /search, /topic, /profile etc)
+        return href.includes('quora.com/') &&
+          !href.includes('/search') && !href.includes('/topic') &&
+          !href.includes('/profile') && !href.includes('/login') &&
+          a.textContent.trim().length > 10;
+      }) || null;
+    }, slug);
 
-    // Try page reload and scroll
-    console.log('Answer button not visible, reloading...');
-    await page.reload({ waitUntil: 'networkidle2', timeout: 60000 }).catch(() => {});
+    const isNull = await page.evaluate(el => el === null, questionLink);
+    if (!isNull) {
+      const href = await page.evaluate(el => el.href, questionLink);
+      const text = await page.evaluate(el => el.textContent.trim().substring(0, 80), questionLink);
+      console.log('Found question link:', text, '|', href);
+      await questionLink.click();
+      await sleep(5000);
+      console.log('After click URL:', page.url());
+      answerFound = await waitForAnswerButton(page, 30000);
+    }
+  } catch(e) {
+    console.log('Search strategy failed:', e.message);
+  }
+
+  // Strategy 2: Direct URL (last resort)
+  if (!answerFound) {
+    console.log('Falling back to direct URL navigation...');
+    await page.goto(canonicalUrl, { waitUntil: 'networkidle2', timeout: 60000 }).catch(() => {});
+    await waitForCloudflare(page, 60000);
+    console.log('Direct URL:', page.url());
     await sleep(5000);
-    answerFound = await waitForAnswerButton(page, 20000);
-    if (answerFound) break;
-
-    if (attempt < 3) await sleep(5000);
+    answerFound = await waitForAnswerButton(page, 40000);
   }
 
   if (!answerFound) {
