@@ -274,11 +274,12 @@ async function waitForAnswerButton(page, maxWait = 45000) {
   }
 
   // --- FIND AND CLICK ANSWER BUTTON ---
-  const answerBtn = await page.evaluateHandle(() => {
+  // Use page.evaluate to click (non-blocking — doesn't wait for navigation)
+  await page.evaluate(() => {
     const all = Array.from(document.querySelectorAll('button, [role="button"]'));
-    return all.find(el => el.textContent.trim() === 'Answer' || el.getAttribute('aria-label') === 'Answer') || null;
+    const btn = all.find(el => el.textContent.trim() === 'Answer' || el.getAttribute('aria-label') === 'Answer');
+    if (btn) btn.click();
   });
-  await answerBtn.click();
   console.log('Clicked Answer button');
   await sleep(3000);
 
@@ -303,15 +304,13 @@ async function waitForAnswerButton(page, maxWait = 45000) {
   await sleep(2000);
 
   // --- SUBMIT ---
-  const submitBtns = await page.$$('button');
-  for (const btn of submitBtns) {
-    const text = await page.evaluate(el => el.textContent.trim(), btn);
-    if (text === 'Submit' || text === 'Post') {
-      await btn.click();
-      console.log('Submitted answer!');
-      break;
-    }
-  }
+  const submitted = await page.evaluate(() => {
+    const btns = Array.from(document.querySelectorAll('button'));
+    const btn = btns.find(b => b.textContent.trim() === 'Submit' || b.textContent.trim() === 'Post');
+    if (btn) { btn.click(); return true; }
+    return false;
+  });
+  console.log(submitted ? 'Submitted answer!' : 'Submit button not found');
 
   await sleep(3000);
   await browser.close();
