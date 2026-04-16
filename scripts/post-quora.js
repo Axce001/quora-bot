@@ -213,31 +213,36 @@ async function waitForAnswerButton(page, maxWait = 45000) {
       waitUntil: 'networkidle2', timeout: 60000
     });
     await waitForCloudflare(page, 30000);
-    await sleep(3000);
+    await sleep(5000);
     console.log('Search URL:', page.url());
 
-    // Find question link in search results
-    const questionLink = await page.evaluateHandle((slug) => {
-      const links = Array.from(document.querySelectorAll('a[href*="/"]'));
-      return links.find(a => {
-        const href = a.href || '';
-        // Match question URL pattern (not /search, /topic, /profile etc)
-        return href.includes('quora.com/') &&
-          !href.includes('/search') && !href.includes('/topic') &&
-          !href.includes('/profile') && !href.includes('/login') &&
-          a.textContent.trim().length > 10;
-      }) || null;
-    }, slug);
+    // Dump all question-style links for debugging
+    const allLinks = await page.evaluate(() => {
+      return Array.from(document.querySelectorAll('a[href]'))
+        .map(a => ({ href: a.href, text: a.textContent.trim().substring(0, 60) }))
+        .filter(l => {
+          const path = l.href.replace('https://www.quora.com', '');
+          // Question URLs: /Word-Word-Word (hyphenated title, NOT /search, /topic, /profile, /notifications, /settings, /#, /answer)
+          return path.match(/^\/[A-Za-z][A-Za-z0-9-]{10,}$/) && l.text.length > 5;
+        })
+        .slice(0, 10);
+    });
+    console.log('Candidate question links:', JSON.stringify(allLinks));
 
-    const isNull = await page.evaluate(el => el === null, questionLink);
-    if (!isNull) {
-      const href = await page.evaluate(el => el.href, questionLink);
-      const text = await page.evaluate(el => el.textContent.trim().substring(0, 80), questionLink);
-      console.log('Found question link:', text, '|', href);
-      await questionLink.click();
-      await sleep(5000);
+    if (allLinks.length > 0) {
+      // Click the first candidate question link
+      const firstHref = allLinks[0].href;
+      console.log('Clicking question link:', firstHref);
+      // Use evaluate to click via href to ensure correct element
+      await page.evaluate((href) => {
+        const link = Array.from(document.querySelectorAll('a[href]')).find(a => a.href === href);
+        if (link) link.click();
+      }, firstHref);
+      await sleep(6000);
       console.log('After click URL:', page.url());
       answerFound = await waitForAnswerButton(page, 30000);
+    } else {
+      console.log('No question links found in search results');
     }
   } catch(e) {
     console.log('Search strategy failed:', e.message);
