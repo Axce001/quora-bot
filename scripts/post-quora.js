@@ -173,12 +173,21 @@ async function waitForAnswerButton(page, maxWait = 45000) {
   // Search Quora for keyword/question
   let answerFound = false;
   try {
-    await page.goto(`https://www.quora.com/search?q=${encodeURIComponent(searchQuery)}&type=question`, {
-      waitUntil: 'networkidle2', timeout: 60000
-    });
+    const searchUrl = `https://www.quora.com/search?q=${encodeURIComponent(searchQuery)}&type=question`;
+    await page.goto(searchUrl, { waitUntil: 'networkidle2', timeout: 60000 });
     await waitForCloudflare(page, 30000);
     await sleep(5000);
     console.log('Search URL:', page.url());
+
+    // If redirected to homepage, retry navigation
+    if (!page.url().includes('/search')) {
+      console.log('Redirected away from search — retrying in 5s...');
+      await sleep(5000);
+      await page.goto(searchUrl, { waitUntil: 'networkidle2', timeout: 60000 });
+      await waitForCloudflare(page, 30000);
+      await sleep(5000);
+      console.log('Search URL (retry):', page.url());
+    }
 
     const allLinks = await page.evaluate(() => {
       const seen = new Set();
