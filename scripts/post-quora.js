@@ -274,27 +274,45 @@ async function waitForAnswerButton(page, maxWait = 45000) {
   }
 
   // --- FIND AND CLICK ANSWER BUTTON ---
-  // Use page.evaluate to click (non-blocking — doesn't wait for navigation)
   await page.evaluate(() => {
     const all = Array.from(document.querySelectorAll('button, [role="button"]'));
     const btn = all.find(el => el.textContent.trim() === 'Answer' || el.getAttribute('aria-label') === 'Answer');
     if (btn) btn.click();
   });
   console.log('Clicked Answer button');
-  await sleep(3000);
+
+  // Handle any navigation triggered by the click
+  try {
+    await page.waitForNavigation({ timeout: 8000, waitUntil: 'domcontentloaded' });
+    console.log('Navigated after click:', page.url());
+    await waitForCloudflare(page, 30000);
+    await sleep(5000);
+    // On question page now — wait for Answer button and click it
+    const answerAgain = await waitForAnswerButton(page, 20000);
+    if (answerAgain) {
+      console.log('Clicking Answer button on question page');
+      await page.evaluate(() => {
+        const all = Array.from(document.querySelectorAll('button, [role="button"]'));
+        const btn = all.find(el => el.textContent.trim() === 'Answer' || el.getAttribute('aria-label') === 'Answer');
+        if (btn) btn.click();
+      });
+    }
+  } catch(e) {
+    console.log('No navigation occurred — expecting inline editor');
+  }
 
   // --- TYPE ANSWER ---
-  await sleep(2000);
-  const editor = await page.$('[contenteditable="true"]');
+  await sleep(3000);
+  page.setDefaultTimeout(15000);
+  const editor = await page.$('[contenteditable="true"]').catch(() => null);
   if (!editor) {
-    console.log('Editor not found. HTML:', await page.evaluate(() => document.body.innerHTML.substring(0, 3000)));
+    console.log('Editor not found. HTML:', await page.evaluate(() => document.body.innerHTML.substring(0, 3000)).catch(() => 'eval failed'));
     await browser.close();
     process.exit(1);
   }
 
-  await editor.click();
+  await editor.click().catch(() => {});
   await sleep(1000);
-  // Use execCommand to insert text (faster than keyboard simulation, avoids protocol timeout)
   await page.evaluate((el, text) => {
     el.focus();
     document.execCommand('selectAll', false, null);
