@@ -218,19 +218,25 @@ async function waitForAnswerButton(page, maxWait = 45000) {
 
     // Dump all question-style links for debugging
     const allLinks = await page.evaluate(() => {
+      const seen = new Set();
       return Array.from(document.querySelectorAll('a[href]'))
         .map(a => ({ href: a.href, text: a.textContent.trim().substring(0, 60) }))
         .filter(l => {
           const path = l.href.replace('https://www.quora.com', '');
-          // Question URLs: /Word-Word-Word (hyphenated title, NOT /search, /topic, /profile, /notifications, /settings, /#, /answer)
-          return path.match(/^\/[A-Za-z][A-Za-z0-9-]{10,}$/) && l.text.length > 5;
+          // Question URLs must: have 3+ hyphens, no sub-paths, not be nav pages
+          const hyphenCount = (path.match(/-/g) || []).length;
+          const isNavPage = /^\/(notifications|profile|settings|bookmarks|drafts|following|followers|answer|edit|ask|topics|spaces|login|signup|about)/.test(path);
+          const isQuestionLike = path.match(/^\/[A-Za-z][A-Za-z0-9-]{15,}$/) && hyphenCount >= 3 && !isNavPage;
+          if (!isQuestionLike) return false;
+          if (seen.has(l.href)) return false;
+          seen.add(l.href);
+          return l.text.length > 10;
         })
-        .slice(0, 10);
+        .slice(0, 5);
     });
     console.log('Candidate question links:', JSON.stringify(allLinks));
 
     if (allLinks.length > 0) {
-      // Click the first candidate question link
       const firstHref = allLinks[0].href;
       console.log('Clicking question link:', firstHref);
       // Use evaluate to click via href to ensure correct element
