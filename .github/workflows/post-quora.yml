@@ -6,12 +6,16 @@ on:
     types: [post-answer]
   workflow_dispatch:
     inputs:
+      keyword:
+        description: 'Keyword to search on Quora (e.g. anonymous chat app)'
+        required: false
+        default: ''
       question_url:
-        description: Question URL (leave blank for auto-rotation)
+        description: 'Question URL (optional, overrides keyword)'
         required: false
         default: ''
       answer_text:
-        description: Answer text (leave blank for auto-rotation)
+        description: 'Answer text'
         required: false
         default: ''
 jobs:
@@ -31,6 +35,7 @@ jobs:
         env:
           QUORA_COOKIES: ${{ secrets.QUORA_COOKIES }}
           QUORA_COOKIES_2: ${{ secrets.QUORA_COOKIES_2 }}
+          KEYWORD: ${{ github.event.client_payload.keyword || inputs.keyword }}
           QUESTION_URL: ${{ github.event.client_payload.question_url || inputs.question_url }}
           ANSWER_TEXT: ${{ github.event.client_payload.answer_text || inputs.answer_text }}
         run: node scripts/post-quora.js
