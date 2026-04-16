@@ -37,28 +37,21 @@ async function waitForCloudflare(page, maxWait = 60000) {
   return false;
 }
 
-// Wait for Quora's React SPA to fully mount
-async function waitForSpaMount(page, maxWait = 30000) {
-  console.log('Waiting for Quora SPA to mount...');
+// Wait for Quora answer button to appear (confirms question page loaded + logged in)
+async function waitForAnswerButton(page, maxWait = 45000) {
+  console.log('Waiting for Answer button...');
   try {
     await page.waitForFunction(
       () => {
-        // Check if React SPA has mounted (#root has children)
-        const root = document.getElementById('root');
-        if (!root || root.children.length === 0) return false;
-        // Check Quora's own render-complete flag
-        if (window.initialRenderComplete === false) return false;
-        // Make sure it's not showing the error state
-        const errDiv = document.getElementById('staticError');
-        if (errDiv && errDiv.style.display !== 'none' && errDiv.offsetParent !== null) return false;
-        return true;
+        const btns = Array.from(document.querySelectorAll('button, [role="button"]'));
+        return btns.some(b => b.textContent.trim() === 'Answer' || b.getAttribute('aria-label') === 'Answer');
       },
       { timeout: maxWait }
     );
-    console.log('SPA mounted successfully');
+    console.log('Answer button appeared!');
     return true;
   } catch (e) {
-    console.log('SPA mount timeout after', maxWait, 'ms');
+    console.log('Answer button not found after', maxWait, 'ms');
     return false;
   }
 }
@@ -97,15 +90,33 @@ async function waitForSpaMount(page, maxWait = 30000) {
     console.log('QUORA_COOKIES found — using cookie-based auth');
     try {
       const cookies = JSON.parse(quoraCookies);
-      // Set cookies before navigating
+      // Fix cookie domains: add leading dot so cookies work on www.quora.com
+      const fixedCookies = cookies.map(c => ({
+        ...c,
+        domain: c.domain.startsWith('.') ? c.domain : ('.' + c.domain.replace(/^www\./, ''))
+      }));
+      // Navigate first to get Cloudflare clearance
       await page.goto('https://www.quora.com/', { waitUntil: 'domcontentloaded', timeout: 60000 });
       await waitForCloudflare(page, 60000);
-      await page.setCookie(...cookies);
-      console.log('Injected', cookies.length, 'cookies');
+      await page.setCookie(...fixedCookies);
+      console.log('Injected', fixedCookies.length, 'cookies with fixed domains');
       // Reload to activate session
-      await page.goto('https://www.quora.com/', { waitUntil: 'domcontentloaded', timeout: 30000 });
-      await sleep(3000);
+      await page.goto('https://www.quora.com/', { waitUntil: 'networkidle2', timeout: 60000 });
+      await sleep(5000);
       console.log('Post-cookie URL:', page.url());
+      // Verify login
+      const isLoggedIn = await page.evaluate(() => {
+        const btns = Array.from(document.querySelectorAll('button, a'));
+        const hasSignIn = btns.some(el => el.textContent.trim() === 'Sign In');
+        return !hasSignIn;
+      });
+      console.log('Login verified:', isLoggedIn);
+      if (!isLoggedIn) {
+        const html = await page.evaluate(() => document.body.innerHTML.substring(0, 1000));
+        console.log('Homepage HTML:', html);
+        await browser.close();
+        process.exit(1);
+      }
     } catch (e) {
       console.log('Cookie injection failed:', e.message);
       await browser.close();
@@ -190,84 +201,43 @@ async function waitForSpaMount(page, maxWait = 30000) {
   }
 
   // --- NAVIGATE TO QUESTION ---
-  // Convert quora.com URL to canonical form (strip /unanswered/ if present)
   const canonicalUrl = questionUrl.replace('https://www.quora.com/unanswered/', 'https://www.quora.com/');
   console.log('Navigating to question:', canonicalUrl);
 
-  let spaOk = false;
+  let answerFound = false;
   for (let attempt = 1; attempt <= 3; attempt++) {
     console.log(`Navigation attempt ${attempt}/3`);
-    await page.goto(canonicalUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    await page.goto(canonicalUrl, { waitUntil: 'networkidle2', timeout: 60000 }).catch(() => {});
     await waitForCloudflare(page, 30000);
     console.log('Question page URL:', page.url());
-
-    spaOk = await waitForSpaMount(page, 20000);
-    if (spaOk) break;
-
-    // SPA failed — try scrolling/interacting to trigger re-render
-    console.log('SPA not mounted, trying page interaction...');
-    await page.evaluate(() => window.scrollTo(0, 200));
     await sleep(3000);
-    spaOk = await waitForSpaMount(page, 10000);
-    if (spaOk) break;
 
-    if (attempt < 3) {
-      console.log('Retrying navigation...');
-      await sleep(5000);
-    }
+    answerFound = await waitForAnswerButton(page, 40000);
+    if (answerFound) break;
+
+    // Try page reload and scroll
+    console.log('Answer button not visible, reloading...');
+    await page.reload({ waitUntil: 'networkidle2', timeout: 60000 }).catch(() => {});
+    await sleep(5000);
+    answerFound = await waitForAnswerButton(page, 20000);
+    if (answerFound) break;
+
+    if (attempt < 3) await sleep(5000);
   }
 
-  if (!spaOk) {
-    console.log('SPA failed to mount after 3 attempts. Dumping page state:');
+  if (!answerFound) {
+    console.log('Answer button never appeared. Page state:');
     const html = await page.evaluate(() => document.body.innerHTML.substring(0, 3000));
     console.log('HTML:', html);
     await browser.close();
     process.exit(1);
   }
 
-  // Dump clickable elements
-  const clickables = await page.evaluate(() =>
-    Array.from(document.querySelectorAll('button, a[role="button"], div[role="button"], span[role="button"]'))
-      .slice(0, 30).map(el => ({
-        tag: el.tagName,
-        text: el.textContent.trim().substring(0, 50),
-        ariaLabel: el.getAttribute('aria-label')
-      }))
-  );
-  console.log('Clickable elements:', JSON.stringify(clickables));
-
-  // --- FIND ANSWER BUTTON ---
-  let answerBtn = null;
-
-  // Strategy 1: button text match
-  const allBtns = await page.$$('button');
-  for (const btn of allBtns) {
-    const text = await page.evaluate(el => el.textContent.trim(), btn);
-    if (text === 'Answer' || text.startsWith('Answer')) { answerBtn = btn; break; }
-  }
-
-  // Strategy 2: aria-label or role
-  if (!answerBtn) {
-    answerBtn = await page.evaluateHandle(() => {
-      const all = Array.from(document.querySelectorAll('[role="button"], button, a'));
-      return all.find(el => el.textContent.trim() === 'Answer' || el.getAttribute('aria-label') === 'Answer') || null;
-    });
-    const isNull = await page.evaluate(el => el === null, answerBtn);
-    if (isNull) answerBtn = null;
-  }
-
-  // Strategy 3: class selectors
-  if (!answerBtn) {
-    answerBtn = await page.$('[class*="AnswerButton"], [class*="answer-button"], [data-functional-selector*="answer"]');
-  }
-
-  if (!answerBtn) {
-    console.log('Answer button not found. Page HTML:');
-    console.log(await page.evaluate(() => document.body.innerHTML.substring(0, 3000)));
-    await browser.close();
-    process.exit(1);
-  }
-
+  // --- FIND AND CLICK ANSWER BUTTON ---
+  const answerBtn = await page.evaluateHandle(() => {
+    const all = Array.from(document.querySelectorAll('button, [role="button"]'));
+    return all.find(el => el.textContent.trim() === 'Answer' || el.getAttribute('aria-label') === 'Answer') || null;
+  });
   await answerBtn.click();
   console.log('Clicked Answer button');
   await sleep(3000);
