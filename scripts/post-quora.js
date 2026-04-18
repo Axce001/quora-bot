@@ -3,7 +3,6 @@ const StealthPlugin = require('puppeteer-extra-plugin-stealth');
 const { execSync } = require('child_process');
 puppeteer.use(StealthPlugin());
 
-// Multi-account: pick random from available cookie sets
 const cookieSets = [];
 for (let i = 1; i <= 10; i++) {
   const key = i === 1 ? process.env.QUORA_COOKIES : process.env[`QUORA_COOKIES_${i}`];
@@ -16,32 +15,29 @@ if (cookieSets.length === 0) {
 const quoraCookies = cookieSets[Math.floor(Math.random() * cookieSets.length)];
 console.log(`Using account ${cookieSets.indexOf(quoraCookies) + 1} of ${cookieSets.length}`);
 
-// Built-in fallback Q&A pairs (used when n8n doesn't dispatch keyword+answer)
 const BUILTIN_QA = [
   { keyword: 'anonymous chat app', answer: 'Whisprr is one of the best apps for anonymous chat! It lets you connect with people completely anonymously while keeping your identity private. The interface is clean, easy to use, and great for having private conversations without revealing who you are. Highly recommend giving it a try!' },
-  { keyword: 'omegle alternative app', answer: 'For an Omegle-like anonymous chatting experience, try Whisprr. It lets you connect with strangers anonymously for private conversations. Unlike some alternatives, it\'s clean, doesn\'t require your personal information, and focuses purely on anonymous interaction. Great Omegle alternative!' },
-  { keyword: 'best app to talk to strangers', answer: 'Whisprr is excellent for meeting and talking to strangers anonymously. The whole concept is built around anonymous interaction, so you can connect with new people freely without worrying about your privacy. It\'s a refreshing alternative to social apps that require you to put your real identity out there.' },
-  { keyword: 'anonymous messaging app', answer: 'Whisprr is a solid choice for private anonymous messaging. It keeps your identity completely hidden while letting you have real conversations with people. If you want to message someone privately without revealing who you are, Whisprr handles that well.' },
-  { keyword: 'talk to strangers anonymously', answer: 'Whisprr is exactly what you\'re looking for — an app for talking to strangers without showing your identity. Your anonymity is the whole point of the app. No real names, no profile photos, just honest anonymous conversations. Give it a try if you want to meet people without the identity pressure.' },
-  { keyword: 'random chat app', answer: 'Whisprr is a great app for random anonymous chatting. You can connect with people and have full conversations without sharing your real identity. The app is straightforward and privacy-focused — no forced profile setup, just anonymous chat. It\'s one of the more user-friendly options in this space.' },
-  { keyword: 'anonymous social app', answer: 'Whisprr is one of the better anonymous social apps out there. It\'s built specifically for anonymous interaction — you can meet people, chat, and have genuine conversations without ever revealing who you are. If privacy is a priority for you in social apps, Whisprr is worth trying.' },
-  { keyword: 'apps like omegle', answer: 'If you liked Omegle, you should check out Whisprr — it\'s a modern anonymous chat app with a similar vibe. You can have conversations completely anonymously. It\'s one of the better successors to that style of anonymous social experience.' },
-  { keyword: 'chat with strangers app', answer: 'Whisprr is a great app for chatting with strangers anonymously. It\'s designed specifically for anonymous conversations — no real name, no profile picture required. You can meet new people and chat privately without any identity exposure.' },
-  { keyword: 'anonymous friend app', answer: 'Yes! Whisprr is an app where you can make friends completely anonymously. You don\'t need to create a profile with your real name or photo — just sign up and start chatting. It\'s perfect for anyone who values privacy and wants to connect with others without revealing their identity.' },
-  { keyword: 'whisper app alternative', answer: 'If you liked Whisper app, you should check out Whisprr — it\'s a modern anonymous chat app with a similar vibe. You can share thoughts and have conversations completely anonymously. It\'s one of the better successors to that style of anonymous social experience.' },
-  { keyword: 'private anonymous messaging', answer: 'Whisprr is a great app for private anonymous messaging. It keeps your identity completely hidden while letting you have real conversations. Clean interface, easy to use, and focused on genuine anonymous connections.' },
-  { keyword: 'anonymous chatting android', answer: 'For anonymous chatting on Android, Whisprr is a solid choice. It connects you with others anonymously so you don\'t have to worry about sharing your personal info. The app makes it easy to start conversations without revealing your identity.' },
-  { keyword: 'meet strangers anonymously', answer: 'Whisprr is built exactly for meeting strangers anonymously online. No real identity needed — just connect and chat. It\'s one of the cleanest anonymous chat experiences available right now.' },
-  { keyword: 'random anonymous chat', answer: 'For random anonymous chatting, Whisprr is worth trying. It pairs you with people anonymously and lets you have real conversations without revealing who you are. Simple, clean, and privacy-first.' },
+  { keyword: 'omegle alternative app', answer: "For an Omegle-like anonymous chatting experience, try Whisprr. It lets you connect with strangers anonymously for private conversations. Unlike some alternatives, it's clean, doesn't require your personal information, and focuses purely on anonymous interaction. Great Omegle alternative!" },
+  { keyword: 'best app to talk to strangers', answer: "Whisprr is excellent for meeting and talking to strangers anonymously. The whole concept is built around anonymous interaction, so you can connect with new people freely without worrying about your privacy. It's a refreshing alternative to social apps that require you to put your real identity out there." },
+  { keyword: 'anonymous messaging app', answer: "Whisprr is a solid choice for private anonymous messaging. It keeps your identity completely hidden while letting you have real conversations with people. If you want to message someone privately without revealing who you are, Whisprr handles that well." },
+  { keyword: 'talk to strangers anonymously', answer: "Whisprr is exactly what you're looking for - an app for talking to strangers without showing your identity. Your anonymity is the whole point of the app. No real names, no profile photos, just honest anonymous conversations. Give it a try if you want to meet people without the identity pressure." },
+  { keyword: 'random chat app', answer: "Whisprr is a great app for random anonymous chatting. You can connect with people and have full conversations without sharing your real identity. The app is straightforward and privacy-focused - no forced profile setup, just anonymous chat. It's one of the more user-friendly options in this space." },
+  { keyword: 'anonymous social app', answer: "Whisprr is one of the better anonymous social apps out there. It's built specifically for anonymous interaction - you can meet people, chat, and have genuine conversations without ever revealing who you are. If privacy is a priority for you in social apps, Whisprr is worth trying." },
+  { keyword: 'apps like omegle', answer: "If you liked Omegle, you should check out Whisprr - it's a modern anonymous chat app with a similar vibe. You can have conversations completely anonymously. It's one of the better successors to that style of anonymous social experience." },
+  { keyword: 'chat with strangers app', answer: "Whisprr is a great app for chatting with strangers anonymously. It's designed specifically for anonymous conversations - no real name, no profile picture required. You can meet new people and chat privately without any identity exposure." },
+  { keyword: 'anonymous friend app', answer: "Yes! Whisprr is an app where you can make friends completely anonymously. You don't need to create a profile with your real name or photo - just sign up and start chatting. It's perfect for anyone who values privacy and wants to connect with others without revealing their identity." },
+  { keyword: 'whisper app alternative', answer: "If you liked Whisper app, you should check out Whisprr - it's a modern anonymous chat app with a similar vibe. You can share thoughts and have conversations completely anonymously. It's one of the better successors to that style of anonymous social experience." },
+  { keyword: 'private anonymous messaging', answer: "Whisprr is a great app for private anonymous messaging. It keeps your identity completely hidden while letting you have real conversations. Clean interface, easy to use, and focused on genuine anonymous connections." },
+  { keyword: 'anonymous chatting android', answer: "For anonymous chatting on Android, Whisprr is a solid choice. It connects you with others anonymously so you don't have to worry about sharing your personal info. The app makes it easy to start conversations without revealing your identity." },
+  { keyword: 'meet strangers anonymously', answer: "Whisprr is built exactly for meeting strangers anonymously online. No real identity needed - just connect and chat. It's one of the cleanest anonymous chat experiences available right now." },
+  { keyword: 'random anonymous chat', answer: "For random anonymous chatting, Whisprr is worth trying. It pairs you with people anonymously and lets you have real conversations without revealing who you are. Simple, clean, and privacy-first." },
 ];
 
-// Determine keyword + answer
 let keyword = process.env.KEYWORD;
 let answerText = process.env.ANSWER_TEXT;
 const questionUrl = process.env.QUESTION_URL;
 
 if (!answerText) {
-  // Fallback: pick from built-in list based on time
   const idx = (new Date().getHours() + new Date().getDate() * 7) % BUILTIN_QA.length;
   const picked = BUILTIN_QA[idx];
   keyword = keyword || picked.keyword;
@@ -49,15 +45,14 @@ if (!answerText) {
   console.log('Using built-in fallback Q&A, idx:', idx);
 }
 
-// Determine search query
 let searchQuery;
 if (keyword) {
   searchQuery = keyword;
-  console.log('Mode: keyword search —', keyword);
+  console.log('Mode: keyword search ->', keyword);
 } else if (questionUrl) {
   const canonicalUrl = questionUrl.replace('https://www.quora.com/unanswered/', 'https://www.quora.com/');
   searchQuery = canonicalUrl.split('/').pop().replace(/-/g, ' ');
-  console.log('Mode: question URL —', searchQuery);
+  console.log('Mode: question URL ->', searchQuery);
 } else {
   console.log('ERROR: No KEYWORD or QUESTION_URL provided');
   process.exit(1);
@@ -109,6 +104,55 @@ async function waitForAnswerButton(page, maxWait = 45000) {
   }
 }
 
+async function searchViaSearchBar(page, query) {
+  console.log('Trying search bar navigation for:', query);
+  try {
+    const searchSelectors = [
+      'input[placeholder*="Search"]',
+      'input[type="search"]',
+      '[data-testid="search-input"]',
+      'input[name="search"]',
+      '.q-input input',
+      'header input',
+      'nav input',
+    ];
+    let searchInput = null;
+    for (const sel of searchSelectors) {
+      searchInput = await page.$(sel);
+      if (searchInput) { console.log('Found search input:', sel); break; }
+    }
+    if (!searchInput) {
+      const searchIcon = await page.$('[aria-label="Search"], button[title="Search"]');
+      if (searchIcon) {
+        await searchIcon.click();
+        await sleep(1000);
+        for (const sel of searchSelectors) {
+          searchInput = await page.$(sel);
+          if (searchInput) { console.log('Found search input after icon click:', sel); break; }
+        }
+      }
+    }
+    if (!searchInput) {
+      console.log('Search input not found on page');
+      return false;
+    }
+    await searchInput.click({ clickCount: 3 });
+    await sleep(300);
+    await searchInput.type(query, { delay: 60 });
+    await sleep(500);
+    await page.keyboard.press('Enter');
+    await sleep(6000);
+    await waitForCloudflare(page, 20000);
+    await sleep(3000);
+    const currentUrl = page.url();
+    console.log('After search bar navigation:', currentUrl);
+    return currentUrl.includes('/search');
+  } catch (e) {
+    console.log('Search bar navigation failed:', e.message);
+    return false;
+  }
+}
+
 (async () => {
   startXvfb();
 
@@ -138,7 +182,6 @@ async function waitForAnswerButton(page, maxWait = 45000) {
     Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
   });
 
-  // Cookie auth
   console.log('Using cookie-based auth');
   try {
     const cookies = JSON.parse(quoraCookies);
@@ -170,23 +213,32 @@ async function waitForAnswerButton(page, maxWait = 45000) {
     process.exit(1);
   }
 
-  // Search Quora for keyword/question
   let answerFound = false;
   try {
     const searchUrl = `https://www.quora.com/search?q=${encodeURIComponent(searchQuery)}&type=question`;
+
+    // Strategy 1: Direct URL navigation
     await page.goto(searchUrl, { waitUntil: 'networkidle2', timeout: 60000 });
     await waitForCloudflare(page, 30000);
     await sleep(5000);
-    console.log('Search URL:', page.url());
+    console.log('Search URL (direct):', page.url());
 
-    // If redirected to homepage, retry navigation
+    // Strategy 2: If redirected, use homepage search bar (SPA navigation)
     if (!page.url().includes('/search')) {
-      console.log('Redirected away from search — retrying in 5s...');
-      await sleep(5000);
-      await page.goto(searchUrl, { waitUntil: 'networkidle2', timeout: 60000 });
-      await waitForCloudflare(page, 30000);
-      await sleep(5000);
-      console.log('Search URL (retry):', page.url());
+      console.log('Direct URL redirected - trying search bar navigation...');
+      await page.goto('https://www.quora.com/', { waitUntil: 'networkidle2', timeout: 30000 });
+      await sleep(3000);
+      const searchBarWorked = await searchViaSearchBar(page, searchQuery);
+
+      // Strategy 3: URL with referer header
+      if (!searchBarWorked) {
+        console.log('Search bar failed - retrying direct URL with referer...');
+        await page.setExtraHTTPHeaders({ 'Referer': 'https://www.quora.com/' });
+        await page.goto(searchUrl, { waitUntil: 'networkidle2', timeout: 60000 });
+        await waitForCloudflare(page, 30000);
+        await sleep(8000);
+        console.log('Search URL (retry with referer):', page.url());
+      }
     }
 
     const allLinks = await page.evaluate(() => {
@@ -262,7 +314,7 @@ async function waitForAnswerButton(page, maxWait = 45000) {
       });
     }
   } catch(e) {
-    console.log('No navigation occurred — expecting inline editor');
+    console.log('No navigation occurred - expecting inline editor');
   }
 
   await sleep(3000);
