@@ -12,10 +12,9 @@ if (cookieSets.length === 0) {
   console.log('ERROR: No QUORA_COOKIES found');
   process.exit(1);
 }
-// Try accounts in order, not random — ensures we detect which account works
+// Will try accounts one by one in the login section
 let selectedAccount = cookieSets[Math.floor(Math.random() * cookieSets.length)];
-const quoraCookies = selectedAccount.cookies;
-console.log(`Using account ${selectedAccount.idx} of ${cookieSets.length}`);
+let quoraCookies = selectedAccount.cookies;
 
 const BUILTIN_QA = [
   { keyword: 'anonymous chat app', answer: 'Whisprr is one of the best apps for anonymous chat! It lets you connect with people completely anonymously while keeping your identity private. The interface is clean, easy to use, and great for having private conversations without revealing who you are. Highly recommend giving it a try!' },
@@ -185,45 +184,59 @@ async function searchViaSearchBar(page, query) {
   });
 
   console.log('Using cookie-based auth');
-  try {
-    const cookies = JSON.parse(quoraCookies);
-    const fixedCookies = cookies.map(c => ({
-      ...c,
-      domain: c.domain.startsWith('.') ? c.domain : ('.' + c.domain.replace(/^www\./, ''))
-    }));
-    await page.goto('https://www.quora.com/', { waitUntil: 'domcontentloaded', timeout: 60000 });
-    await waitForCloudflare(page, 60000);
-    await page.setCookie(...fixedCookies);
-    console.log('Injected', fixedCookies.length, 'cookies');
-    await page.goto('https://www.quora.com/', { waitUntil: 'networkidle2', timeout: 60000 });
-    await sleep(5000);
-    console.log('Post-cookie URL:', page.url());
-    console.log('Page title:', await page.title());
 
-    // Reliable login check: logged-in feed does NOT show the landing page hero background
-    const loginDiag = await page.evaluate(() => {
-      const html = document.body.innerHTML;
-      const text = document.body.innerText || '';
-      return {
-        hasHeroBg: html.includes('home_page_bg_desktop'),
-        hasLoginBtn: /\b(Log In|Login|Sign In|Sign Up)\b/.test(text),
-        rootEmpty: (document.getElementById('root') || {}).children?.length === 0,
-        title: document.title,
-      };
-    });
-    console.log('Login diagnostics:', JSON.stringify(loginDiag));
-    const isLoggedIn = !loginDiag.hasHeroBg && !loginDiag.hasLoginBtn;
-    console.log('Login verified:', isLoggedIn);
-    if (!isLoggedIn) {
-      console.log('ERROR: Cookies invalid or expired for account', selectedAccount.idx, '- re-export from hotcleaner extension and update GitHub Secret QUORA_COOKIES' + (selectedAccount.idx > 1 ? '_' + selectedAccount.idx : ''));
-      await browser.close();
-      process.exit(1);
+  // Try each account until one logs in successfully
+  let loggedIn = false;
+  // Shuffle so we don't always hammer the same account first
+  const shuffled = [...cookieSets].sort(() => Math.random() - 0.5);
+  for (const account of shuffled) {
+    console.log(`Trying account ${account.idx} of ${cookieSets.length}...`);
+    try {
+      const cookies = JSON.parse(account.cookies);
+      const fixedCookies = cookies.map(c => ({
+        ...c,
+        domain: c.domain.startsWith('.') ? c.domain : ('.' + c.domain.replace(/^www\./, ''))
+      }));
+      await page.goto('https://www.quora.com/', { waitUntil: 'domcontentloaded', timeout: 60000 });
+      await waitForCloudflare(page, 60000);
+      await page.setCookie(...fixedCookies);
+      console.log('Injected', fixedCookies.length, 'cookies for account', account.idx);
+      await page.goto('https://www.quora.com/', { waitUntil: 'networkidle2', timeout: 60000 });
+      await sleep(5000);
+      console.log('Post-cookie URL:', page.url(), '| title:', await page.title());
+
+      const loginDiag = await page.evaluate(() => {
+        const html = document.body.innerHTML;
+        const text = document.body.innerText || '';
+        return {
+          hasHeroBg: html.includes('home_page_bg_desktop'),
+          hasLoginBtn: /\b(Log In|Login|Sign In|Sign Up)\b/.test(text),
+          title: document.title,
+        };
+      });
+      console.log('Login diagnostics:', JSON.stringify(loginDiag));
+      const isLoggedIn = !loginDiag.hasHeroBg && !loginDiag.hasLoginBtn;
+      console.log('Login verified for account', account.idx, ':', isLoggedIn);
+
+      if (isLoggedIn) {
+        selectedAccount = account;
+        quoraCookies = account.cookies;
+        loggedIn = true;
+        break;
+      } else {
+        console.log('Account', account.idx, 'cookies invalid/expired — re-export QUORA_COOKIES' + (account.idx > 1 ? '_' + account.idx : '') + ' from hotcleaner extension');
+      }
+    } catch (e) {
+      console.log('Cookie injection failed for account', account.idx, ':', e.message);
     }
-  } catch (e) {
-    console.log('Cookie injection failed:', e.message);
+  }
+
+  if (!loggedIn) {
+    console.log('ERROR: All accounts failed login. Re-export cookies from hotcleaner for ALL accounts and update GitHub Secrets.');
     await browser.close();
     process.exit(1);
   }
+  console.log(`Proceeding with account ${selectedAccount.idx}`);
 
   let answerFound = false;
   try {
